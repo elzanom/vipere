@@ -631,12 +631,12 @@ function formatManagementReport(raw) {
     .filter((block) => !/^Summary:/i.test(block));
 
   const positions = blocks
-    .filter((block) => /\|\s*Age:/.test(block) && /\|\s*Val:/.test(block))
+    .filter((block) => block.startsWith("🟢") || block.startsWith("🔴"))
     .map(formatManagementPositionBlock)
     .filter(Boolean);
 
   const extra = blocks
-    .filter((block) => !(/\|\s*Age:/.test(block) && /\|\s*Val:/.test(block)))
+    .filter((block) => !(block.startsWith("🟢") || block.startsWith("🔴")))
     .join("\n\n")
     .trim();
   const extraMeaningful = extra && !/^No tool actions needed\.?$/i.test(extra);
@@ -672,26 +672,27 @@ function formatManagementSummary(summary) {
 function formatManagementPositionBlock(block) {
   const lines = block.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const first = lines[0] || "";
-  const pair = firstMatch(first, /^\*?\*?([^|*]+?)\*?\*?\s*\|/) || "Position";
-  const age = firstMatch(first, /Age:\s*([^|]+)/i);
-  const pnl = firstMatch(first, /PnL:\s*([^|]+)/i);
-  const yieldPct = firstMatch(first, /Yield:\s*([^|]+)/i);
-  const range = firstMatch(first, /\|\s*(🟢\s*IN|🔴\s*OOR[^|]*)\s*\|/i);
-  const action = first.split("|").map((part) => part.trim()).filter(Boolean).pop();
+  
+  // Example position line: 🟢 KINS-SOL           +0.2%  yield 12.44% ◎0.05 0h 27m  STAY
+  const match = first.match(/^([🟢🔴])\s+([A-Za-z0-9_\-]+)\s+([\+\-0-9\.]+%?)\s+(?:yield\s+([0-9\.]+%?))?\s*([◎\$][0-9\.]+)\s+([0-9]+h\s+[0-9]+m|[0-9]+m|\?m)(?:\s+OOR([0-9]+m))?\s+(\w+)/i);
+  
+  if (!match) {
+    return `📍 <b>${first}</b>`;
+  }
+
+  const [_, icon, pair, pnl, yieldPct, val, age, oor, action] = match;
+  
+  const cleanRange = icon === "🟢" ? "🟢 In Range" : "🔴 Out of Range" + (oor ? ` (${oor})` : "");
   const notes = lines.slice(1).join("\n");
 
-  const cleanPair = pair.replace(/\*/g, "").trim();
-  const cleanRange = range 
-    ? (range.includes("🟢") ? "🟢 In Range" : "🔴 Out of Range")
-    : "🟢 In Range";
-
   return [
-    `📍 <b>${cleanPair}</b> | <code>${age ? age.trim() : "0h 0m"} held</code>`,
+    `📍 <b>${pair}</b> | <code>${age} held</code>`,
     "━━━━━━━━━━━━━━━━━━━━━━",
     `  • 📏 <b>Status:</b> ${cleanRange}`,
-    pnl ? `  • 📈 <b>Current PnL:</b> <code>${pnl.trim()}</code>` : null,
-    yieldPct ? `  • 🌾 <b>Estimated Yield:</b> <code>${yieldPct.trim()} / 24h</code>` : null,
-    `  • 🎯 <b>VERDICT:</b> <code>${action ? action.trim().toUpperCase() : "STAY"}</code>`,
+    `  • 📈 <b>Current PnL:</b> <code>${pnl}</code>`,
+    yieldPct ? `  • 🌾 <b>Estimated Yield:</b> <code>${yieldPct} / 24h</code>` : null,
+    `  • 💰 <b>Valuation:</b> <code>${val}</code>`,
+    `  • 🎯 <b>VERDICT:</b> <code>${action}</code>`,
     notes ? `  • 📝 <b>Notes:</b>\n<code>${notes}</code>` : null,
   ].filter(Boolean).join("\n");
 }
