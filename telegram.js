@@ -170,7 +170,7 @@ async function postTelegramRaw(method, body) {
 
 export async function sendMessage(text) {
   if (!TOKEN || !chatId) return;
-  return postTelegram("sendMessage", { text: String(text).slice(0, 4096) });
+  return postTelegram("sendMessage", { text: String(text).slice(0, 4096), parse_mode: "HTML" });
 }
 
 export async function sendMessageWithButtons(text, inlineKeyboard) {
@@ -178,6 +178,7 @@ export async function sendMessageWithButtons(text, inlineKeyboard) {
   return postTelegram("sendMessage", {
     text: String(text).slice(0, 4096),
     reply_markup: { inline_keyboard: inlineKeyboard },
+    parse_mode: "HTML",
   });
 }
 
@@ -266,6 +267,7 @@ export async function editMessage(text, messageId) {
   return postTelegram("editMessageText", {
     message_id: messageId,
     text: String(text).slice(0, 4096),
+    parse_mode: "HTML",
   });
 }
 
@@ -275,6 +277,7 @@ export async function editMessageWithButtons(text, messageId, inlineKeyboard) {
     message_id: messageId,
     text: String(text).slice(0, 4096),
     reply_markup: { inline_keyboard: inlineKeyboard },
+    parse_mode: "HTML",
   });
 }
 
@@ -540,7 +543,7 @@ export function formatAgentReport(text) {
   if (/Summary:\s*💼/i.test(raw) || /\|\s*Age:\s*.*\|\s*Val:/i.test(raw)) return formatManagementReport(raw);
   if (/🚀\s*DEPLOYED|^DEPLOYED\b/i.test(raw)) return formatDeployReport(raw);
   if (/⛔\s*NO DEPLOY|NO DEPLOY/i.test(raw)) return formatNoDeployReport(raw);
-  return raw;
+  return escapeHtml(raw);
 }
 
 function extractLineAfter(raw, label) {
@@ -639,14 +642,11 @@ function formatManagementReport(raw) {
   const extraMeaningful = extra && !/^No tool actions needed\.?$/i.test(extra);
 
   return [
-    "🔄 MANAGEMENT CYCLE",
-    "━━━━━━━━━━━━━━━━",
+    "🔄 <b>SYSTEM MONITORING CYCLE</b>",
+    "━━━━━━━━━━━━━━━━━━━━━━",
     summary ? formatManagementSummary(summary) : null,
-    positions.length ? "" : null,
-    positions.join("\n\n"),
-    extraMeaningful ? "" : null,
-    extraMeaningful ? "🛠️ Actions" : null,
-    extraMeaningful ? compactText(extra, 900) : null,
+    positions.length ? "\n" + positions.join("\n\n") : null,
+    extraMeaningful ? "\n🛠️ <b>Actions</b>\n" + compactText(extra, 900) : null,
   ].filter(Boolean).join("\n").slice(0, 4096);
 }
 
@@ -655,12 +655,17 @@ function formatManagementSummary(summary) {
   const totalValue = firstMatch(summary, /positions\s*\|\s*([^|]+?)\s*\|\s*fees:/i);
   const fees = firstMatch(summary, /fees:\s*([^|]+?)\s*\|/i);
   const action = summary.split("|").pop()?.trim();
+  
+  const isPM2 = !!process.env.pm_id;
+  const sysMode = isPM2 ? "Autonomous (PM2)" : "Autonomous (Node)";
+
   return [
-    "📌 Summary",
-    positions ? `📂 Positions: ${positions}` : null,
-    totalValue ? `💼 Value: ${totalValue}` : null,
-    fees ? `💎 Fees: ${fees}` : null,
-    action ? `🎯 Action: ${action}` : null,
+    "💼 <b>PORTFOLIO STATUS</b>",
+    positions ? `  ▸ Positions : <code>${positions} active</code>` : null,
+    totalValue ? `  ▸ Valuation : <code>${totalValue}</code>` : null,
+    fees ? `  ▸ Yielding  : <code>${fees}</code>` : null,
+    `  ▸ System    : <code>${sysMode}</code>`,
+    action ? `  ▸ Action    : <b>${action.toUpperCase()}</b>` : null,
   ].filter(Boolean).join("\n");
 }
 
@@ -675,14 +680,19 @@ function formatManagementPositionBlock(block) {
   const action = first.split("|").map((part) => part.trim()).filter(Boolean).pop();
   const notes = lines.slice(1).join("\n");
 
+  const cleanPair = pair.replace(/\*/g, "").trim();
+  const cleanRange = range 
+    ? (range.includes("🟢") ? "🟢 In Range" : "🔴 Out of Range")
+    : "🟢 In Range";
+
   return [
-    `📍 ${pair.trim()}`,
-    age ? `⏱ Age: ${age.trim()}` : null,
-    pnl ? `📈 PnL: ${pnl.trim()}` : null,
-    yieldPct ? `🌾 Yield: ${yieldPct.trim()}` : null,
-    range ? `📏 Range: ${range.replace("🟢 IN", "🟢 IN RANGE").trim()}` : null,
-    action ? `🎯 Action: ${action}` : null,
-    notes ? `📝 ${notes}` : null,
+    `📍 <b>${cleanPair}</b> | <code>${age ? age.trim() : "0h 0m"} held</code>`,
+    "━━━━━━━━━━━━━━━━━━━━━━",
+    `  • 📏 <b>Status:</b> ${cleanRange}`,
+    pnl ? `  • 📈 <b>Current PnL:</b> <code>${pnl.trim()}</code>` : null,
+    yieldPct ? `  • 🌾 <b>Estimated Yield:</b> <code>${yieldPct.trim()} / 24h</code>` : null,
+    `  • 🎯 <b>VERDICT:</b> <code>${action ? action.trim().toUpperCase() : "STAY"}</code>`,
+    notes ? `  • 📝 <b>Notes:</b>\n<code>${notes}</code>` : null,
   ].filter(Boolean).join("\n");
 }
 
