@@ -59,6 +59,14 @@ Bagian ini melacak perubahan pada algoritma pengambilan keputusan, manajemen ris
 *   **Modifikasi Logika**:
     *   Formula kriteria Kelly mengkalkulasi persentase saldo deploy SOL secara adaptif berdasarkan *win rate* historis dari 30 hari terakhir.
 
+### 🧠 8. Penggantian LLM ke DeepSeek V4 Flash
+*   **Perubahan**: Mengganti model kecerdasan buatan utama dari MiniMax (`minimax/minimax-m2.7` / `minimax/minimax-m2.5`) ke **DeepSeek V4 Flash** (`deepseek/deepseek-v4-flash`).
+*   **Detail Berkas**:
+    *   [MODIFY] [user-config.json](file:///home/elzanom/agent/meridian/user-config.json)
+    *   [MODIFY] [user-config.example.json](file:///home/elzanom/agent/meridian/user-config.example.json)
+    *   [MODIFY] Seluruh preset konfigurasi (`user-config.json.15menit`, `user-config.json.15menit-konservatif`, `user-config.json.30menit`, `user-config.json.30menit-konservatif`, `user-config.json.5menit`, `user-config.json.5menit-agresif`, `user-config.json.5menit-konservatif`).
+*   **Efek Operasional**: Meningkatkan kecepatan berpikir, pemrosesan konteks (hingga 1M token), efisiensi inferensi, dan kualitas penalaran untuk penyaringan token otonom serta manajemen posisi otonom dengan DeepSeek V4 Flash.
+
 ---
 
 ## 🎨 Bagian 2: Perubahan Tampilan & Pengalaman Pengguna (UI/UX)

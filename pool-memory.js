@@ -41,6 +41,16 @@ function isOorCloseReason(reason) {
   return text === "oor" || text.includes("out of range") || text.includes("oor");
 }
 
+function isLowYieldCloseReason(reason) {
+  const text = String(reason || "").trim().toLowerCase();
+  return text === "low yield" || text.includes("low yield");
+}
+
+function isStopLossCloseReason(reason) {
+  const text = String(reason || "").trim().toLowerCase();
+  return text === "stop loss" || text.includes("stop loss") || text.includes("stop_loss");
+}
+
 function isAdjustedWinRateExcludedReason(reason) {
   const text = String(reason || "").trim().toLowerCase();
   return text.includes("out of range") ||
@@ -162,10 +172,21 @@ export function recordPoolDeploy(poolAddress, deployData) {
   }
 
   // Set cooldown for low yield closes — pool wasn't profitable enough, don't redeploy soon
-  if (deploy.close_reason === "low yield") {
+  if (isLowYieldCloseReason(deploy.close_reason)) {
     const cooldownHours = 4;
     const cooldownUntil = setPoolCooldown(entry, cooldownHours, "low yield");
     log("pool-memory", `Cooldown set for ${entry.name} until ${cooldownUntil} (low yield close)`);
+  }
+
+  // Set cooldown for stop loss closes — token crashed, avoid immediate re-entry
+  if (isStopLossCloseReason(deploy.close_reason)) {
+    const cooldownHours = 4;
+    const cooldownUntil = setPoolCooldown(entry, cooldownHours, "stop loss");
+    const mintCooldownUntil = setBaseMintCooldown(db, entry.base_mint, cooldownHours, "stop loss");
+    log("pool-memory", `Cooldown set for ${entry.name} until ${cooldownUntil} (stop loss close)`);
+    if (entry.base_mint && mintCooldownUntil) {
+      log("pool-memory", `Base mint cooldown set for ${entry.base_mint.slice(0, 8)} until ${mintCooldownUntil} (stop loss close)`);
+    }
   }
 
   const oorTriggerCount = config.management.oorCooldownTriggerCount ?? 3;
