@@ -803,21 +803,20 @@ export async function runScreeningCycle({ silent = false } = {}) {
         mem ? `  memory_untrusted: ${sanitizeUntrustedPromptText(mem, 500)}` : null,
       ].filter(Boolean).join("\n");
 
-      // Stage signals for Darwinian weighting — captured before LLM decides
-      if (config.darwin?.enabled) {
-        const baseMint = pool.base?.mint || pool.base_mint || ti?.mint || null;
-        stageSignals(pool.pool, {
-          base_mint:             baseMint,
-          organic_score:         pool.organic_score         ?? null,
-          fee_tvl_ratio:         pool.fee_active_tvl_ratio  ?? null,
-          volume:                pool.volume_window         ?? null,
-          mcap:                  pool.mcap                  ?? null,
-          holder_count:          ti?.holders                ?? null,
-          smart_wallets_present: (sw?.in_pool?.length ?? 0) > 0,
-          narrative_quality:     n?.narrative ? "present" : "absent",
-          volatility:            pool.volatility            ?? null,
-        });
-      }
+      // Stage signals for Darwinian weighting and deployment logs — captured before LLM decides
+      const baseMint = pool.base?.mint || pool.base_mint || ti?.mint || null;
+      stageSignals(pool.pool, {
+        base_mint:             baseMint,
+        organic_score:         pool.organic_score         ?? null,
+        fee_tvl_ratio:         pool.fee_active_tvl_ratio  ?? null,
+        volume:                pool.volume_window         ?? null,
+        mcap:                  pool.mcap                  ?? null,
+        holder_count:          ti?.holders                ?? null,
+        smart_wallets_present: (sw?.in_pool?.length ?? 0) > 0,
+        narrative_quality:     n?.narrative ? "present" : "absent",
+        volatility:            pool.volatility            ?? null,
+        indicator_confirmation: pool.indicator_confirmation ?? null,
+      });
 
       return block;
     });
