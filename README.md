@@ -1,10 +1,11 @@
-# Meridian
+# Vipera 🐍
 
-**Autonomous Meteora DLMM liquidity management agent for Solana, powered by LLMs.**
+**An autonomous, production-hardened Meteora DLMM liquidity management agent for Solana, powered by LLMs.**
 
-**Links:** [Website](https://agentmeridian.xyz) | [Telegram](https://t.me/agentmeridian) | [X](https://x.com/meridian_agent)
+**Developed & Maintained by:** [elzanom](https://github.com/elzanom)  
+**Based on:** Upstream [Meridian](https://github.com/yunus-0x/meridian)
 
-Meridian runs continuous screening and management cycles, deploying capital into high-quality Meteora DLMM pools and closing positions based on live PnL, yield, and range data. It learns from every position it closes.
+Vipera is a highly customized, production-hardened fork of the Meridian DLMM LP agent. It has been extensively optimized by **elzanom** to feature strict anti-rugpull screening (RugCheck API + Low Organic Filter), real-time state index lag recovery, PM2 lifecycle hardening, dynamic Kelly criterion sizing, and an advanced graphical daily PnL briefing via Telegram.
 
 ---
 
