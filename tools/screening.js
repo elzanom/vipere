@@ -7,6 +7,7 @@ import { confirmIndicatorPreset } from "./chart-indicators.js";
 import { getAgentMeridianBase, getAgentMeridianHeaders } from "./agent-meridian.js";
 
 const DATAPI_JUP = "https://datapi.jup.ag/v1";
+export const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 const POOL_DISCOVERY_BASE = "https://pool-discovery-api.datapi.meteora.ag";
 const MIN_VOLATILITY_TIMEFRAME = "30m";
@@ -20,6 +21,7 @@ const TIMEFRAME_MINUTES = {
   "12h": 720,
   "24h": 1440,
 };
+const POOL_DISCOVERY_TIMEFRAMES = new Set(["5m", "30m", "1h", "2h", "4h", "12h", "24h"]);
 const PVP_SHORTLIST_LIMIT = 2;
 const PVP_RIVAL_LIMIT = 2;
 const PVP_MIN_ACTIVE_TVL = 5_000;
@@ -73,14 +75,56 @@ function getPoolBaseMint(pool) {
     null;
 }
 
-function getVolatilityTimeframe(sourceTimeframe) {
+function getPoolQuoteMint(pool) {
+  return pool?.token_y?.address ||
+    pool?.quote_token_address ||
+    pool?.quote_mint ||
+    pool?.quote?.mint ||
+    null;
+}
+
+export function isSolQuotePool(pool) {
+  return getPoolQuoteMint(pool) === SOL_MINT;
+}
+
+export function getDynamicMinFeeActiveTvlRatio(pools, configuredMinFee) {
+  const configured = Number(configuredMinFee ?? 0);
+  const allFeeRatios = (Array.isArray(pools) ? pools : [])
+    .map((pool) => Number(pool?.fee_active_tvl_ratio))
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => a - b);
+
+  if (allFeeRatios.length === 0) {
+    return {
+      medianFeeRatio: null,
+      dynamicMinFeeActiveTvlRatio: configured > 0 ? configured : 0,
+    };
+  }
+
+  const medianFeeRatio = allFeeRatios[Math.floor(allFeeRatios.length / 2)];
+  const dynamicMinFeeActiveTvlRatio = configured > 0
+    ? Math.max(configured * 0.5, medianFeeRatio * 0.5)
+    : medianFeeRatio * 0.5;
+
+  return { medianFeeRatio, dynamicMinFeeActiveTvlRatio };
+}
+
+export function getVolatilityTimeframe(sourceTimeframe) {
   const source = String(sourceTimeframe || "").trim();
   const sourceMinutes = TIMEFRAME_MINUTES[source];
   const minMinutes = TIMEFRAME_MINUTES[MIN_VOLATILITY_TIMEFRAME];
   return sourceMinutes != null && sourceMinutes >= minMinutes ? source : MIN_VOLATILITY_TIMEFRAME;
 }
 
-function getRawPoolScreeningRejectReason(pool, s) {
+export function getPoolDiscoveryTimeframe(sourceTimeframe) {
+  const source = String(sourceTimeframe || "").trim();
+  if (POOL_DISCOVERY_TIMEFRAMES.has(source)) return source;
+  const sourceMinutes = TIMEFRAME_MINUTES[source];
+  if (sourceMinutes != null && sourceMinutes < TIMEFRAME_MINUTES["30m"]) return "30m";
+  return "1h";
+}
+
+export function getRawPoolScreeningRejectReason(pool, s) {
   const base = pool?.token_x || {};
   const quote = pool?.token_y || {};
   const binStep = numeric(pool?.dlmm_params?.bin_step);
@@ -94,6 +138,10 @@ function getRawPoolScreeningRejectReason(pool, s) {
   const quoteOrganic = numeric(quote?.organic_score);
   const launchpad = getPoolLaunchpad(pool);
   const createdAt = numeric(base?.created_at);
+
+  if (!isSolQuotePool(pool)) {
+    return `quote token ${quote?.symbol || quote?.address || "unknown"} is not SOL`;
+  }
 
   if (s.excludeHighSupplyConcentration && pool?.base_token_has_high_supply_concentration === true) {
     return "base token has high supply concentration";
@@ -116,6 +164,9 @@ function getRawPoolScreeningRejectReason(pool, s) {
   }
   if (!isUsableVolatility(volatility)) {
     return `volatility ${volatility ?? "unknown"} is unusable`;
+  }
+  if (s.maxVolatility != null && volatility > s.maxVolatility) {
+    return `volatility ${volatility} above maxVolatility ${s.maxVolatility}`;
   }
   if (baseOrganic == null || baseOrganic < s.minOrganic) {
     return `base organic ${baseOrganic ?? "unknown"} below minOrganic ${s.minOrganic}`;
@@ -156,10 +207,11 @@ async function fetchDiscordSignalCandidates() {
 }
 
 async function fetchPoolDiscoveryPage({ page_size, filters, timeframe, category }) {
+  const discoveryTimeframe = getPoolDiscoveryTimeframe(timeframe);
   const url = `${POOL_DISCOVERY_BASE}/pools?` +
     `page_size=${page_size}` +
     `&filter_by=${encodeURIComponent(filters)}` +
-    `&timeframe=${timeframe}` +
+    `&timeframe=${discoveryTimeframe}` +
     `&category=${category}`;
 
   const res = await fetch(url);
@@ -172,10 +224,11 @@ async function fetchPoolDiscoveryPage({ page_size, filters, timeframe, category 
 }
 
 async function fetchPoolDiscoveryDetail({ poolAddress, timeframe }) {
+  const discoveryTimeframe = getPoolDiscoveryTimeframe(timeframe);
   const url = `${POOL_DISCOVERY_BASE}/pools?` +
     `page_size=1` +
     `&filter_by=${encodeURIComponent(`pool_address=${poolAddress}`)}` +
-    `&timeframe=${timeframe}`;
+    `&timeframe=${discoveryTimeframe}`;
 
   const res = await fetch(url);
 
@@ -381,8 +434,12 @@ async function refreshDiscordOnlyPools(pools, timeframe) {
  */
 export async function discoverPools({
   page_size = 50,
+  timeframe = config.screening.timeframe,
+  category = config.screening.category,
 } = {}) {
   const s = config.screening;
+  const discoveryTimeframe = getPoolDiscoveryTimeframe(timeframe);
+  const queryMaxVolatility = Number(s.maxVolatility);
   const filters = [
     "base_token_has_critical_warnings=false",
     "quote_token_has_critical_warnings=false",
@@ -398,6 +455,7 @@ export async function discoverPools({
     `dlmm_bin_step>=${s.minBinStep}`,
     `dlmm_bin_step<=${s.maxBinStep}`,
     `fee_active_tvl_ratio>=${s.minFeeActiveTvlRatio}`,
+    Number.isFinite(queryMaxVolatility) && queryMaxVolatility > 0 ? `volatility<=${queryMaxVolatility}` : null,
     `base_token_organic_score>=${s.minOrganic}`,
     `quote_token_organic_score>=${s.minQuoteOrganic}`,
     s.minTokenAgeHours != null ? `base_token_created_at<=${Date.now() - s.minTokenAgeHours * 3_600_000}` : null,
@@ -410,8 +468,8 @@ export async function discoverPools({
   const data = await fetchPoolDiscoveryPage({
     page_size,
     filters,
-    timeframe: s.timeframe,
-    category: s.category,
+    timeframe: discoveryTimeframe,
+    category,
   });
 
   let rawPools = Array.isArray(data.data) ? data.data : [];
@@ -439,7 +497,7 @@ export async function discoverPools({
     if (config.screening.discordSignalMode === "only") {
       rawPools = signalPools;
       // Refresh all signal pools with live data since discovery_pool is a stale snapshot
-      await refreshDiscordOnlyPools(rawPools, s.timeframe);
+      await refreshDiscordOnlyPools(rawPools, timeframe);
     } else if (signalPools.length > 0) {
       const byPool = new Map(rawPools.map((pool) => [pool.pool_address, pool]));
       const discordOnlyPools = [];
@@ -462,24 +520,41 @@ export async function discoverPools({
       // Refresh discord-only pools with live data — their discovery_pool is a stale snapshot
       // so volume/volatility/fee may be 0 even when the pool is active right now
       if (discordOnlyPools.length > 0) {
-        await refreshDiscordOnlyPools(discordOnlyPools, s.timeframe);
+        await refreshDiscordOnlyPools(discordOnlyPools, timeframe);
       }
     }
   }
 
-  rawPools = await applyVolatilityTimeframe(rawPools, s.timeframe);
+  rawPools = await applyVolatilityTimeframe(rawPools, timeframe);
   await enrichDiscordSignalLaunchpads(rawPools);
+
+  const { medianFeeRatio, dynamicMinFeeActiveTvlRatio } = getDynamicMinFeeActiveTvlRatio(rawPools, s.minFeeActiveTvlRatio);
+  if (dynamicMinFeeActiveTvlRatio > 0) {
+    log(
+      "screening",
+      `Fee/TVL dynamic floor: base=${Number(s.minFeeActiveTvlRatio ?? 0).toFixed(2)} median=${medianFeeRatio != null ? medianFeeRatio.toFixed(2) : "n/a"} dynamic=${dynamicMinFeeActiveTvlRatio.toFixed(2)}`
+    );
+  }
 
   const filteredExamples = [];
   const thresholdedRawPools = rawPools.filter((pool) => {
     const reason = getRawPoolScreeningRejectReason(pool, s);
-    if (!reason) return true;
-    filteredExamples.push({ name: pool.name || pool.pool_address || "unknown pool", reason });
-    if (pool.discord_signal) log("screening", `Discord signal filtered: ${pool.name || pool.pool_address} — ${reason}`);
-    return false;
+    if (reason) {
+      filteredExamples.push({ name: pool.name || pool.pool_address || "unknown pool", reason });
+      if (pool.discord_signal) log("screening", `Discord signal filtered: ${pool.name || pool.pool_address} — ${reason}`);
+      return false;
+    }
+    const feeActiveTvlRatio = numeric(pool?.fee_active_tvl_ratio);
+    if (dynamicMinFeeActiveTvlRatio > 0 && (feeActiveTvlRatio == null || feeActiveTvlRatio < dynamicMinFeeActiveTvlRatio)) {
+      const dynamicReason = `fee/active-TVL ${feeActiveTvlRatio ?? "unknown"} below dynamic floor ${dynamicMinFeeActiveTvlRatio.toFixed(2)}`;
+      filteredExamples.push({ name: pool.name || pool.pool_address || "unknown pool", reason: dynamicReason });
+      if (pool.discord_signal) log("screening", `Discord signal filtered: ${pool.name || pool.pool_address} — ${dynamicReason}`);
+      return false;
+    }
+    return true;
   });
 
-  const condensed = thresholdedRawPools.map(condensePool);
+  const condensed = thresholdedRawPools.map((pool) => condensePool(pool, timeframe));
 
   // Hard-filter blacklisted tokens and blocked deployers (what pool discovery already gave us)
   let pools = condensed.filter((p) => {
@@ -534,6 +609,11 @@ export async function discoverPools({
     total: data.total,
     pools,
     filtered_examples: filteredExamples,
+    dynamic_min_fee_active_tvl_ratio: dynamicMinFeeActiveTvlRatio,
+    median_fee_active_tvl_ratio: medianFeeRatio,
+    screening_timeframe: timeframe,
+    discovery_timeframe: discoveryTimeframe,
+    volatility_timeframe: getVolatilityTimeframe(timeframe),
   };
 }
 
@@ -552,12 +632,26 @@ export async function getTopCandidates({ limit = 10 } = {}) {
   const { positions } = await getMyPositions();
   const occupiedPools = new Set(positions.map((p) => p.pool));
   const occupiedMints = new Set(positions.map((p) => p.base_mint).filter(Boolean));
+  
+  // Calculate dynamic yield floor based on market conditions (Median of top pools)
+  const { medianFeeRatio, dynamicMinFeeActiveTvlRatio } = getDynamicMinFeeActiveTvlRatio(
+    pools,
+    config.screening.minFeeActiveTvlRatio,
+  );
+  log(
+    "screening",
+    `Market Median Fee/TVL: ${medianFeeRatio != null ? medianFeeRatio.toFixed(2) : "n/a"}%. Dynamic Min Floor: ${dynamicMinFeeActiveTvlRatio.toFixed(2)}%`
+  );
+
   const minTvl = Number(config.screening.minTvl ?? 0);
   const maxTvl = config.screening.maxTvl == null ? null : Number(config.screening.maxTvl);
-  const minFeeActiveTvlRatio = Number(config.screening.minFeeActiveTvlRatio ?? 0);
 
   const eligible = pools
     .filter((p) => {
+      if (!isSolQuotePool(p)) {
+        pushFilteredReason(filteredOut, p, `quote token ${p.quote?.symbol || p.quote?.mint || "unknown"} is not SOL`);
+        return false;
+      }
       const tvl = Number(p.tvl ?? p.active_tvl ?? 0);
       if (Number.isFinite(minTvl) && minTvl > 0 && tvl < minTvl) {
         pushFilteredReason(filteredOut, p, `TVL $${tvl} below minTvl $${minTvl}`);
@@ -568,12 +662,17 @@ export async function getTopCandidates({ limit = 10 } = {}) {
         return false;
       }
       const feeActiveTvlRatio = Number(p.fee_active_tvl_ratio);
-      if (Number.isFinite(minFeeActiveTvlRatio) && minFeeActiveTvlRatio > 0 && (!Number.isFinite(feeActiveTvlRatio) || feeActiveTvlRatio < minFeeActiveTvlRatio)) {
-        pushFilteredReason(filteredOut, p, `fee/active-TVL ${Number.isFinite(feeActiveTvlRatio) ? feeActiveTvlRatio : "unknown"} below minFeeActiveTvlRatio ${minFeeActiveTvlRatio}`);
+      if (dynamicMinFeeActiveTvlRatio > 0 && (!Number.isFinite(feeActiveTvlRatio) || feeActiveTvlRatio < dynamicMinFeeActiveTvlRatio)) {
+        pushFilteredReason(filteredOut, p, `fee/active-TVL ${Number.isFinite(feeActiveTvlRatio) ? feeActiveTvlRatio : "unknown"} below dynamic floor ${dynamicMinFeeActiveTvlRatio.toFixed(0)}`);
         return false;
       }
       if (!isUsableVolatility(p.volatility)) {
         pushFilteredReason(filteredOut, p, `volatility ${p.volatility ?? "unknown"} is unusable`);
+        return false;
+      }
+      const maxVol = config.screening.maxVolatility;
+      if (maxVol != null && Number(p.volatility) > maxVol) {
+        pushFilteredReason(filteredOut, p, `volatility ${p.volatility} above maxVolatility ${maxVol}`);
         return false;
       }
       if (occupiedPools.has(p.pool)) {
@@ -617,12 +716,13 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     const { getAdvancedInfo, getPriceInfo, getClusterList, getRiskFlags } = await import("./okx.js");
     const okxResults = await Promise.allSettled(
       eligible.map(async (p) => {
-        if (!p.base?.mint) return { adv: null, price: null, clusters: [], risk: null };
-        const [adv, price, clusters, risk] = await Promise.allSettled([
+        if (!p.base?.mint) return { adv: null, price: null, clusters: [], risk: null, rugcheck: null };
+        const [adv, price, clusters, risk, rugcheckRes] = await Promise.allSettled([
           getAdvancedInfo(p.base.mint),
           getPriceInfo(p.base.mint),
           getClusterList(p.base.mint),
           getRiskFlags(p.base.mint),
+          fetch(`https://api.rugcheck.xyz/v1/tokens/${p.base.mint}/report/summary`).then(r => r.ok ? r.json() : null)
         ]);
 
         const mintShort = p.base.mint.slice(0, 8);
@@ -636,13 +736,14 @@ export async function getTopCandidates({ limit = 10 } = {}) {
           price: price.status === "fulfilled" ? price.value : null,
           clusters: clusters.status === "fulfilled" ? clusters.value : [],
           risk: risk.status === "fulfilled" ? risk.value : null,
+          rugcheck: rugcheckRes.status === "fulfilled" ? rugcheckRes.value : null,
         };
       })
     );
     for (let i = 0; i < eligible.length; i++) {
       const r = okxResults[i];
       if (r.status !== "fulfilled") continue;
-      const { adv, price, clusters, risk } = r.value;
+      const { adv, price, clusters, risk, rugcheck } = r.value;
       if (adv) {
         eligible[i].risk_level      = adv.risk_level;
         eligible[i].bundle_pct      = adv.bundle_pct;
@@ -662,6 +763,10 @@ export async function getTopCandidates({ limit = 10 } = {}) {
         eligible[i].price_vs_ath_pct = price.price_vs_ath_pct;
         eligible[i].ath              = price.ath;
       }
+      if (rugcheck) {
+        eligible[i].rugcheck_score = rugcheck.score;
+        eligible[i].is_rugcheck_danger = rugcheck.risks?.some(r => r.level === 'danger');
+      }
       if (clusters?.length) {
         // Surface KOL presence and top cluster trend for LLM
         eligible[i].kol_in_clusters      = clusters.some((c) => c.has_kol);
@@ -669,11 +774,21 @@ export async function getTopCandidates({ limit = 10 } = {}) {
         eligible[i].top_cluster_hold_pct = clusters[0]?.holding_pct ?? null;
       }
     }
-    // Wash trading hard filter — fake volume = misleading fee yield
+    // Wash trading & Rugpull hard filter
     eligible.splice(0, eligible.length, ...eligible.filter((p) => {
       if (p.is_wash) {
         log("screening", `Risk filter: dropped ${p.name} — wash trading flagged`);
         pushFilteredReason(filteredOut, p, "wash trading flagged");
+        return false;
+      }
+      if (p.is_rugcheck_danger || p.rugcheck_score > 5000) {
+        log("screening", `Risk filter: dropped ${p.name} — RugCheck danger (score: ${p.rugcheck_score})`);
+        pushFilteredReason(filteredOut, p, "rugcheck danger");
+        return false;
+      }
+      if (p.organic_score != null && p.organic_score < 30) {
+        log("screening", `Risk filter: dropped ${p.name} — organic score ${p.organic_score} < 30`);
+        pushFilteredReason(filteredOut, p, "low organic score");
         return false;
       }
       return true;
@@ -738,7 +853,12 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     const confirmedEligible = eligible.filter((pool) => {
       const confirmation = confirmationByPool.get(pool.pool);
       pool.indicator_confirmation = confirmation || null;
-      if (!confirmation || confirmation.confirmed) return true;
+      if (!confirmation || confirmation.confirmed) {
+        if (confirmation && confirmation.confirmed && !confirmation.skipped) {
+          log("screening", `Indicator confirmed ${pool.name} (${pool.pool.slice(0, 8)}): ${confirmation.reason}`);
+        }
+        return true;
+      }
       pushFilteredReason(filteredOut, pool, `indicator reject: ${confirmation.reason}`);
       log("screening", `Indicator rejected ${pool.name} (${pool.pool.slice(0, 8)}): ${confirmation.reason}`);
       return false;
@@ -749,10 +869,73 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     }
   }
 
+  // ── Pool History Enrichment + Momentum Score ─────────────────────────
+  if (eligible.length > 0) {
+    const { getPoolStats } = await import("../lessons.js").catch(() => ({ getPoolStats: () => null }));
+
+    // Fetch 5m snapshots for momentum (parallel, ignore failures)
+    const momentumResults = await Promise.allSettled(
+      eligible.map((p) => fetchPoolDiscoveryDetail({ poolAddress: p.pool, timeframe: "5m" }))
+    );
+
+    for (let i = 0; i < eligible.length; i++) {
+      const p = eligible[i];
+
+      // Pool history from local lessons
+      const hist = getPoolStats(p.pool);
+      if (hist) {
+        p.pool_history_count = hist.count;
+        p.pool_history_win_rate_pct = hist.win_rate_pct;
+        p.pool_history_avg_pnl_pct = hist.avg_pnl_pct;
+        p.pool_history_best_pnl_pct = hist.best_pnl_pct;
+        p.pool_history_worst_pnl_pct = hist.worst_pnl_pct;
+        log("screening", `Pool history enriched: ${p.name} — ${hist.count} trades, ${hist.win_rate_pct}% win rate, avg PnL ${hist.avg_pnl_pct}%`);
+      }
+
+      // Momentum: compare 5m volume vs pool's own 30m volume
+      const snap5m = momentumResults[i]?.status === "fulfilled" ? momentumResults[i].value : null;
+      let momentumScore = 0;
+      if (snap5m) {
+        const vol5m = Number(snap5m.volume ?? 0);
+        const vol30m = Number(p.volume ?? p.volume_window ?? 0);
+        const fee5m = Number(snap5m.fee_active_tvl_ratio ?? 0);
+        const fee30m = Number(p.fee_active_tvl_ratio ?? 0);
+        if (vol5m > 0 && vol30m > 0) {
+          // Annualize 5m to 30m-equivalent: vol5m * 6 vs vol30m
+          if (vol5m * 6 > vol30m * 1.2) momentumScore++;
+          if (vol5m * 6 < vol30m * 0.5) momentumScore--;
+        }
+        if (fee5m > 0 && fee30m > 0) {
+          if (fee5m > fee30m * 1.2) momentumScore++;
+          if (fee5m < fee30m * 0.5) momentumScore--;
+        }
+        p.momentum_score = momentumScore;
+        p.vol_5m = vol5m;
+        p.fee_tvl_5m = fee5m;
+      }
+    }
+
+    // Hard-drop candidates with very negative momentum (dying volume)
+    const beforeMomentum = eligible.length;
+    eligible.splice(0, eligible.length, ...eligible.filter((p) => {
+      if (p.momentum_score != null && p.momentum_score <= -2) {
+        log("screening", `Momentum filter: dropped ${p.name} — score ${p.momentum_score} (volume dying)`);
+        pushFilteredReason(filteredOut, p, `momentum score ${p.momentum_score} — volume dying`);
+        return false;
+      }
+      return true;
+    }));
+    if (eligible.length < beforeMomentum) {
+      log("screening", `Momentum filter removed ${beforeMomentum - eligible.length} candidate(s)`);
+    }
+  }
+
   return {
     candidates: eligible,
     total_screened: pools.length,
     filtered_examples: filteredOut.slice(0, 3),
+    dynamic_min_fee_active_tvl_ratio: dynamicMinFeeActiveTvlRatio,
+    median_fee_active_tvl_ratio: medianFeeRatio,
   };
 }
 
@@ -775,7 +958,9 @@ export async function getPoolDetail({ pool_address, timeframe = "5m" }) {
  * Condense a pool object for LLM consumption.
  * Raw API returns ~100+ fields per pool. The LLM only needs ~20.
  */
-function condensePool(p) {
+function condensePool(p, sourceTimeframe = config.screening.timeframe) {
+  const primaryTimeframe = sourceTimeframe || config.screening.timeframe;
+  const volatilityTimeframe = p.volatility_timeframe || getVolatilityTimeframe(primaryTimeframe);
   return {
     pool: p.pool_address,
     name: p.name,
@@ -800,14 +985,14 @@ function condensePool(p) {
     volume_window: round(p.volume),
     fee_active_tvl_ratio: p.fee_active_tvl_ratio != null ? fix(p.fee_active_tvl_ratio, 4) : null,
     volatility: fix(p.volatility, 4),
-    volatility_timeframe: p.volatility_timeframe || getVolatilityTimeframe(config.screening.timeframe),
+    volatility_timeframe: volatilityTimeframe,
 
     // Per-timeframe breakdown (populated when sourceTimeframe !== volatilityTimeframe)
-    ...(p.volatility_timeframe && p.volatility_timeframe !== config.screening.timeframe ? {
-      [`volume_${config.screening.timeframe}`]: round(p[`volume_${config.screening.timeframe}`] ?? null),
-      [`volume_${p.volatility_timeframe}`]: round(p[`volume_${p.volatility_timeframe}`] ?? null),
-      [`volatility_${config.screening.timeframe}`]: fix(p[`volatility_${config.screening.timeframe}`] ?? null, 4),
-      [`volatility_${p.volatility_timeframe}`]: fix(p[`volatility_${p.volatility_timeframe}`] ?? null, 4),
+    ...(p.volatility_timeframe && volatilityTimeframe !== primaryTimeframe ? {
+      [`volume_${primaryTimeframe}`]: round(p[`volume_${primaryTimeframe}`] ?? null),
+      [`volume_${volatilityTimeframe}`]: round(p[`volume_${volatilityTimeframe}`] ?? null),
+      [`volatility_${primaryTimeframe}`]: fix(p[`volatility_${primaryTimeframe}`] ?? null, 4),
+      [`volatility_${volatilityTimeframe}`]: fix(p[`volatility_${volatilityTimeframe}`] ?? null, 4),
     } : {}),
 
     // Token health

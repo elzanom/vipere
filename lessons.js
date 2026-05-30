@@ -48,7 +48,11 @@ function load() {
     return { lessons: [], performance: [] };
   }
   try {
-    return JSON.parse(fs.readFileSync(LESSONS_FILE, "utf8"));
+    const data = JSON.parse(fs.readFileSync(LESSONS_FILE, "utf8"));
+    return {
+      lessons: Array.isArray(data.lessons) ? data.lessons : [],
+      performance: Array.isArray(data.performance) ? data.performance : []
+    };
   } catch {
     return { lessons: [], performance: [] };
   }
@@ -357,12 +361,12 @@ export function evolveThresholds(perfData, config) {
     }
   }
 
-  // ── 2. minFeeTvlRatio ─────────────────────────────────────────
+  // ── 2. minFeeActiveTvlRatio ───────────────────────────────────
   // Raise the floor if low-fee pools consistently underperform.
   {
     const winnerFees = winners.map((p) => p.fee_tvl_ratio).filter(isFiniteNum);
     const loserFees  = losers.map((p) => p.fee_tvl_ratio).filter(isFiniteNum);
-    const current    = config.screening.minFeeTvlRatio;
+    const current    = config.screening.minFeeActiveTvlRatio;
 
     if (winnerFees.length >= 2) {
       // Minimum fee/TVL among winners — we know pools below this don't work for us
@@ -372,8 +376,8 @@ export function evolveThresholds(perfData, config) {
         const newVal  = clamp(nudge(current, target, MAX_CHANGE_PER_STEP), 0.05, 10.0);
         const rounded = Number(newVal.toFixed(2));
         if (rounded > current) {
-          changes.minFeeTvlRatio = rounded;
-          rationale.minFeeTvlRatio = `Lowest winner fee_tvl=${minWinnerFee.toFixed(2)} — raised floor from ${current} → ${rounded}`;
+          changes.minFeeActiveTvlRatio = rounded;
+          rationale.minFeeActiveTvlRatio = `Lowest winner fee_tvl=${minWinnerFee.toFixed(2)} — raised floor from ${current} → ${rounded}`;
         }
       }
     }
@@ -388,9 +392,9 @@ export function evolveThresholds(perfData, config) {
           const target  = maxLoserFee * 1.2;
           const newVal  = clamp(nudge(current, target, MAX_CHANGE_PER_STEP), 0.05, 10.0);
           const rounded = Number(newVal.toFixed(2));
-          if (rounded > current && !changes.minFeeTvlRatio) {
-            changes.minFeeTvlRatio = rounded;
-            rationale.minFeeTvlRatio = `Losers had fee_tvl<=${maxLoserFee.toFixed(2)}, winners higher — raised floor from ${current} → ${rounded}`;
+          if (rounded > current && !changes.minFeeActiveTvlRatio) {
+            changes.minFeeActiveTvlRatio = rounded;
+            rationale.minFeeActiveTvlRatio = `Losers had fee_tvl<=${maxLoserFee.toFixed(2)}, winners higher — raised floor from ${current} → ${rounded}`;
           }
         }
       }
@@ -437,9 +441,9 @@ export function evolveThresholds(perfData, config) {
 
   // Apply to live config object immediately
   const s = config.screening;
-  if (changes.maxVolatility    != null) s.maxVolatility    = changes.maxVolatility;
-  if (changes.minFeeTvlRatio   != null) s.minFeeTvlRatio   = changes.minFeeTvlRatio;
-  if (changes.minOrganic       != null) s.minOrganic       = changes.minOrganic;
+  if (changes.maxVolatility        != null) s.maxVolatility        = changes.maxVolatility;
+  if (changes.minFeeActiveTvlRatio != null) s.minFeeActiveTvlRatio = changes.minFeeActiveTvlRatio;
+  if (changes.minOrganic           != null) s.minOrganic           = changes.minOrganic;
 
   // Log a lesson summarizing the evolution
   const data = load();
@@ -706,7 +710,7 @@ function fmt(lessons) {
  */
 export function getPerformanceHistory({ hours = 24, limit = 50 } = {}) {
   const data = load();
-  const p = data.performance;
+  const p = data.performance.filter(isValidPerformanceEntry);
 
   if (p.length === 0) return { positions: [], count: 0, hours };
 
@@ -745,7 +749,7 @@ export function getPerformanceHistory({ hours = 24, limit = 50 } = {}) {
  */
 export function getPerformanceSummary() {
   const data = load();
-  const p = data.performance;
+  const p = data.performance.filter(isValidPerformanceEntry);
 
   if (p.length === 0) return null;
 
@@ -763,3 +767,120 @@ export function getPerformanceSummary() {
     total_lessons: data.lessons.length,
   };
 }
+
+function isValidPerformanceEntry(entry) {
+  return (
+    entry &&
+    Number.isFinite(Number(entry.pnl_usd)) &&
+    Number.isFinite(Number(entry.pnl_pct)) &&
+    Number.isFinite(Number(entry.range_efficiency))
+  );
+}
+
+// ─── Per-Pool Stats ────────────────────────────────────────────
+
+/**
+ * Get historical performance stats for a specific pool address.
+ * Used during screening to enrich candidates with their track record.
+ *
+ * @param {string} poolAddress
+ * @returns {{ count, win_rate_pct, avg_pnl_pct, avg_duration_min, best_pnl_pct, worst_pnl_pct } | null}
+ */
+export function getPoolStats(poolAddress) {
+  if (!poolAddress) return null;
+  const data = load();
+  const records = data.performance.filter(
+    (p) => p.pool === poolAddress && isValidPerformanceEntry(p)
+  );
+  if (records.length === 0) return null;
+
+  const wins = records.filter((p) => p.pnl_pct > 0).length;
+  const avgPnl = records.reduce((s, p) => s + p.pnl_pct, 0) / records.length;
+  const avgDuration = records.reduce((s, p) => s + (p.minutes_held || 0), 0) / records.length;
+  const bestPnl = Math.max(...records.map((p) => p.pnl_pct));
+  const worstPnl = Math.min(...records.map((p) => p.pnl_pct));
+
+  return {
+    count: records.length,
+    win_rate_pct: Math.round((wins / records.length) * 100),
+    avg_pnl_pct: Math.round(avgPnl * 100) / 100,
+    avg_duration_min: Math.round(avgDuration),
+    best_pnl_pct: Math.round(bestPnl * 100) / 100,
+    worst_pnl_pct: Math.round(worstPnl * 100) / 100,
+  };
+}
+
+// ─── Time-of-Day Analysis ──────────────────────────────────────
+
+/**
+ * Analyze historical performance per UTC hour to find best/worst entry windows.
+ * Requires at least minSamples total closed positions to produce results.
+ *
+ * @param {number} [minSamples=10]
+ * @returns {{ best: number[], worst: number[], hourly: Object } | null}
+ */
+export function getBestEntryHours(minSamples = 10) {
+  const data = load();
+  const records = data.performance.filter(isValidPerformanceEntry);
+  if (records.length < minSamples) return null;
+
+  // Group by UTC deploy hour
+  const hourly = {};
+  for (const p of records) {
+    const deployedAt = p.deployed_at || p.recorded_at;
+    if (!deployedAt) continue;
+    const hour = new Date(deployedAt).getUTCHours();
+    if (!hourly[hour]) hourly[hour] = { wins: 0, total: 0, pnl_sum: 0 };
+    hourly[hour].total++;
+    if (p.pnl_pct > 0) hourly[hour].wins++;
+    hourly[hour].pnl_sum += p.pnl_pct;
+  }
+
+  // Score each hour: win_rate * 0.6 + avg_pnl_normalization * 0.4
+  const scored = Object.entries(hourly)
+    .filter(([, h]) => h.total >= 2)
+    .map(([hour, h]) => ({
+      hour: Number(hour),
+      win_rate: h.wins / h.total,
+      avg_pnl: h.pnl_sum / h.total,
+      total: h.total,
+    }))
+    .sort((a, b) => b.win_rate - a.win_rate);
+
+  const best = scored.slice(0, 6).map((s) => s.hour);
+  const worst = scored.slice(-4).filter((s) => s.win_rate < 0.35).map((s) => s.hour);
+
+  return { best, worst, hourly };
+}
+
+// ─── Kelly Criterion Win Rate ──────────────────────────────────
+
+/**
+ * Compute win rate over the past N days for Kelly Criterion sizing.
+ *
+ * @param {number} [lookbackDays=30]
+ * @param {number} [minSamples=10]
+ * @returns {{ win_rate: number, sample_count: number, kelly_scale: number } | null}
+ */
+export function getWinRateForKelly(lookbackDays = 30, minSamples = 10) {
+  const data = load();
+  const cutoff = new Date(Date.now() - lookbackDays * 86_400_000).toISOString();
+  const records = data.performance.filter(
+    (p) => isValidPerformanceEntry(p) && (p.recorded_at || "") >= cutoff
+  );
+
+  if (records.length < minSamples) return null;
+
+  const wins = records.filter((p) => p.pnl_pct > 0).length;
+  const winRate = wins / records.length;
+
+  // Simplified Kelly: f = win_rate * 0.5 (half-Kelly for safety)
+  const kellyScale = winRate * 0.5;
+
+  return {
+    win_rate: Math.round(winRate * 100) / 100,
+    sample_count: records.length,
+    kelly_scale: Math.round(kellyScale * 100) / 100,
+  };
+}
+

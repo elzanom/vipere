@@ -6,6 +6,10 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import axios from "axios";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
@@ -131,31 +135,62 @@ export async function feesCheck(mint) {
   if (!mint) return { pass: true, global_fees_sol: null };
 
   let minFeesSol = 30;
+  let gmgnApiKey = process.env.GMGN_API_KEY || "";
+  let useGmgnApi = false;
+
   try {
     const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, "user-config.json"), "utf8"));
     minFeesSol = cfg.screening?.minTokenFeesSol ?? cfg.minTokenFeesSol ?? 30;
+    gmgnApiKey = cfg.gmgnApiKey || process.env.GMGN_API_KEY || "";
+    useGmgnApi = cfg.useGmgnApi ?? false;
   } catch { /* use default */ }
 
-  try {
-    const res = await fetch(`https://datapi.jup.ag/v1/assets/search?query=${mint}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    const tokens = Array.isArray(data) ? data : [data];
-    const token = tokens.find(t => t.id === mint) || tokens[0];
-    const globalFees = token?.fees != null ? parseFloat(token.fees) : null;
+  let globalFees = null;
+  let source = "Jupiter";
 
-    if (globalFees === null) {
-      console.warn(`  [fees] No fee data for ${mint} — passing`);
+  // Try GMGN API if enabled and apiKey is configured
+  if (useGmgnApi && gmgnApiKey) {
+    try {
+      const cmd = `GMGN_API_KEY="${gmgnApiKey}" npx -y gmgn-cli token info --chain sol --address ${mint} --raw`;
+      const { stdout } = await execAsync(cmd);
+      const data = JSON.parse(stdout);
+      // Map potential fee fields from GMGN response
+      const gmgnFee = data.total_fee || data.total_fee_sol || data.stat?.total_fee || data.pool?.fee || null;
+      if (gmgnFee !== null) {
+        globalFees = parseFloat(gmgnFee);
+        source = "GMGN";
+      }
+    } catch (e) {
+      console.warn(`  [fees] GMGN API CLI error: ${e.message} — falling back to Jupiter`);
+    }
+  }
+
+  // Fallback to Jupiter Datapi if GMGN did not yield fee data
+  if (globalFees === null) {
+    try {
+      const res = await fetch(`https://datapi.jup.ag/v1/assets/search?query=${mint}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const tokens = Array.isArray(data) ? data : [data];
+      const token = tokens.find(t => t.id === mint) || tokens[0];
+      globalFees = token?.fees != null ? parseFloat(token.fees) : null;
+      source = "Jupiter";
+    } catch (e) {
+      console.warn(`  [fees] Jupiter API error: ${e.message} — passing`);
       return { pass: true, global_fees_sol: null };
     }
-    if (globalFees < minFeesSol) {
-      return { pass: false, reason: `global fees too low: ${globalFees.toFixed(2)} SOL < ${minFeesSol} SOL threshold` };
-    }
-    return { pass: true, global_fees_sol: globalFees };
-  } catch (e) {
-    console.warn(`  [fees] Jupiter API error: ${e.message} — passing`);
+  }
+
+  if (globalFees === null) {
+    console.warn(`  [fees] No fee data for ${mint} — passing`);
     return { pass: true, global_fees_sol: null };
   }
+
+  if (globalFees < minFeesSol) {
+    return { pass: false, reason: `global fees too low: ${globalFees.toFixed(2)} SOL < ${minFeesSol} SOL threshold (via ${source})` };
+  }
+
+  return { pass: true, global_fees_sol: globalFees };
 }
 
 // Run the full pipeline

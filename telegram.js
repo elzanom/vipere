@@ -2,6 +2,8 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { log } from "./logger.js";
+import { generatePnLImage } from "./pnl-card.js";
+import { getStrategy, getActiveStrategy } from "./strategy-library.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
@@ -22,15 +24,18 @@ let _liveMessageDepth = 0;
 let _warnedMissingChatId = false;
 let _warnedMissingAllowedUsers = false;
 
-// ─── chatId persistence ──────────────────────────────────────────
-function loadChatId() {
+let telegramLogBehavior = "default";
+
+// ─── config and chatId persistence ──────────────────────────────────────────
+function loadConfig() {
   try {
     if (fs.existsSync(USER_CONFIG_PATH)) {
       const cfg = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
       if (cfg.telegramChatId) chatId = cfg.telegramChatId;
+      if (cfg.telegramLogBehavior) telegramLogBehavior = cfg.telegramLogBehavior;
     }
   } catch (error) {
-    log("telegram_warn", `Invalid user-config.json; chatId not loaded: ${error.message}`);
+    log("telegram_warn", `Invalid user-config.json; config not loaded: ${error.message}`);
   }
 }
 
@@ -46,7 +51,44 @@ function saveChatId(id) {
   }
 }
 
-loadChatId();
+loadConfig();
+
+// ─── lastMessageId persistence ──────────────────────────────────
+function loadLastMessageId(slot = "default") {
+  try {
+    const statePath = path.join(__dirname, "state.json");
+    if (fs.existsSync(statePath)) {
+      const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+      if (slot !== "default") {
+        return state.lastTelegramMessageIds?.[slot] || null;
+      }
+      return state.lastTelegramMessageId || null;
+    }
+  } catch (e) {
+    // Ignore read errors
+  }
+  return null;
+}
+
+function saveLastMessageId(id, slot = "default") {
+  try {
+    const statePath = path.join(__dirname, "state.json");
+    let state = {};
+    if (fs.existsSync(statePath)) {
+      state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+    }
+    if (slot === "default") {
+      state.lastTelegramMessageId = id;
+    } else {
+      state.lastTelegramMessageIds = state.lastTelegramMessageIds || {};
+      state.lastTelegramMessageIds[slot] = id;
+    }
+    state.lastUpdated = new Date().toISOString();
+    fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+  } catch (e) {
+    log("telegram_error", `Failed to save lastTelegramMessageId: ${e.message}`);
+  }
+}
 
 function isAuthorizedIncomingMessage(msg) {
   const incomingChatId = String(msg.chat?.id || "");
@@ -94,6 +136,9 @@ async function postTelegram(method, body) {
     if (!res.ok) {
       const err = await res.text();
       log("telegram_error", `${method} ${res.status}: ${err.slice(0, 200)}`);
+      if (err.includes("message is not modified")) {
+        return { ok: true, notModified: true };
+      }
       return null;
     }
     return await res.json();
@@ -136,9 +181,84 @@ export async function sendMessageWithButtons(text, inlineKeyboard) {
   });
 }
 
+function defaultActionKeyboard() {
+  return [
+    [
+      { text: "\u{1F4CA} Status", callback_data: "/status" },
+      { text: "\u{1F4CB} Positions", callback_data: "/positions" },
+    ],
+    [
+      { text: "\u{1F50D} Candidates", callback_data: "/candidates" },
+      { text: "\u2699\uFE0F Settings", callback_data: "/settings" },
+    ],
+    [
+      { text: "\u{1F504} Manage", callback_data: "/manage" },
+      { text: "\u{1F4C8} Briefing", callback_data: "/briefing" },
+      { text: "\u23F8\uFE0F Pause", callback_data: "/pause" },
+    ],
+  ];
+}
+
+export async function sendActionMessage(text, inlineKeyboard = defaultActionKeyboard()) {
+  return sendMessageWithButtons(text, inlineKeyboard);
+}
+
+export async function sendManagedActionMessage(text, inlineKeyboard = defaultActionKeyboard(), slot = "default") {
+  loadConfig();
+
+  if (telegramLogBehavior === "delete") {
+    const prevId = loadLastMessageId(slot);
+    if (prevId) {
+      await deleteMessage(prevId).catch(() => {});
+    }
+  }
+
+  if (telegramLogBehavior === "overwrite") {
+    const prevId = loadLastMessageId(slot);
+    if (prevId) {
+      const edited = await editMessageWithButtons(text, prevId, inlineKeyboard);
+      if (edited) return edited;
+    }
+  }
+
+  const sent = await sendMessageWithButtons(text, inlineKeyboard);
+  const messageId = sent?.result?.message_id ?? null;
+  if (messageId && (telegramLogBehavior === "overwrite" || telegramLogBehavior === "delete")) {
+    saveLastMessageId(messageId, slot);
+  }
+  return sent;
+}
+
 export async function sendHTML(html) {
   if (!TOKEN || !chatId) return;
   return postTelegram("sendMessage", { text: html.slice(0, 4096), parse_mode: "HTML" });
+}
+
+export async function sendPhoto(buffer, caption = "") {
+  if (!TOKEN || !chatId) return;
+  try {
+    const formData = new FormData();
+    formData.append("chat_id", chatId);
+    if (caption) {
+      formData.append("caption", caption.slice(0, 1024));
+      formData.append("parse_mode", "HTML");
+    }
+    formData.append("photo", new Blob([buffer], { type: "image/png" }), "pnl.png");
+
+    const res = await fetch(`${BASE}/sendPhoto`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      log("telegram_error", `sendPhoto ${res.status}: ${err.slice(0, 200)}`);
+      return null;
+    }
+    return await res.json();
+  } catch (e) {
+    log("telegram_error", `sendPhoto failed: ${e.message}`);
+    return null;
+  }
 }
 
 export async function editMessage(text, messageId) {
@@ -158,11 +278,40 @@ export async function editMessageWithButtons(text, messageId, inlineKeyboard) {
   });
 }
 
+export async function deleteMessage(messageId) {
+  if (!TOKEN || !chatId || !messageId) return null;
+  return postTelegram("deleteMessage", { message_id: messageId });
+}
+
 export async function answerCallbackQuery(callbackQueryId, text = "") {
   if (!TOKEN || !callbackQueryId) return null;
   return postTelegramRaw("answerCallbackQuery", {
     callback_query_id: callbackQueryId,
     ...(text ? { text: String(text).slice(0, 200) } : {}),
+  });
+}
+
+export async function setupBotCommands() {
+  if (!TOKEN) return null;
+  return postTelegramRaw("setMyCommands", {
+    commands: [
+      { command: "start", description: "Open main menu" },
+      { command: "help", description: "Show command list" },
+      { command: "status", description: "Wallet and position snapshot" },
+      { command: "wallet", description: "Wallet balance and deploy amount" },
+      { command: "positions", description: "List open positions" },
+      { command: "config", description: "Show runtime config" },
+      { command: "strategy", description: "Show LP strategies" },
+      { command: "settings", description: "Open settings menu" },
+      { command: "manage", description: "Run management cycle now" },
+      { command: "screen", description: "Refresh pool candidates" },
+      { command: "candidates", description: "Show cached candidates" },
+      { command: "briefing", description: "Show 24h briefing" },
+      { command: "pause", description: "Pause autonomous cycles" },
+      { command: "resume", description: "Resume autonomous cycles" },
+      { command: "restart", description: "Restart the agent process" },
+      { command: "hive", description: "HiveMind status" },
+    ],
   });
 }
 
@@ -252,35 +401,77 @@ export async function createLiveMessage(title, intro = "Starting...") {
   if (!TOKEN || !chatId) return null;
   const typing = createTypingIndicator();
 
+  // Reload config to pick up runtime behavior changes
+  loadConfig();
+
   const state = {
     title,
     intro,
     toolLines: [],
     footer: "",
     messageId: null,
+    lastText: "",
     flushTimer: null,
     flushPromise: null,
     flushRequested: false,
   };
 
+  // Respect configured Telegram log behavior
+  if (telegramLogBehavior === "overwrite") {
+    state.messageId = loadLastMessageId();
+  } else if (telegramLogBehavior === "delete") {
+    const prevId = loadLastMessageId();
+    if (prevId) {
+      deleteMessage(prevId).catch(() => {});
+    }
+  }
+
   function render() {
-    const sections = [state.title];
-    if (state.intro) sections.push(state.intro);
-    if (state.toolLines.length > 0) sections.push(state.toolLines.join("\n"));
-    if (state.footer) sections.push(state.footer);
+    const sections = [`${state.title}`, "━━━━━━━━━━━━━━━━"];
+    if (state.intro) sections.push(`Status\n${state.intro}`);
+    if (state.toolLines.length > 0) sections.push(`Tools\n${state.toolLines.join("\n")}`);
+    if (state.footer) sections.push(`Result\n${state.footer}`);
     return sections.join("\n\n").slice(0, 4096);
   }
 
-  async function flushNow() {
+  async function flushNow({ buttons = false } = {}) {
     state.flushTimer = null;
     state.flushRequested = false;
     const text = render();
+    if (text === state.lastText) return;
+
     if (!state.messageId) {
-      const sent = await sendMessage(text);
+      const sent = buttons
+        ? await sendMessageWithButtons(text, defaultActionKeyboard())
+        : await sendMessage(text);
       state.messageId = sent?.result?.message_id ?? null;
+      if (state.messageId && (telegramLogBehavior === "overwrite" || telegramLogBehavior === "delete")) {
+        saveLastMessageId(state.messageId);
+      }
+      state.lastText = text;
       return;
     }
-    await editMessage(text, state.messageId);
+
+    let success = false;
+    if (buttons) {
+      const res = await editMessageWithButtons(text, state.messageId, defaultActionKeyboard());
+      success = !!res;
+    } else {
+      const res = await editMessage(text, state.messageId);
+      success = !!res;
+    }
+
+    // If edit failed (message deleted, too old, or invalid), fallback to sending a new one
+    if (!success) {
+      const sent = buttons
+        ? await sendMessageWithButtons(text, defaultActionKeyboard())
+        : await sendMessage(text);
+      state.messageId = sent?.result?.message_id ?? null;
+      if (state.messageId && (telegramLogBehavior === "overwrite" || telegramLogBehavior === "delete")) {
+        saveLastMessageId(state.messageId);
+      }
+    }
+    state.lastText = text;
   }
 
   function scheduleFlush(delay = 300) {
@@ -295,7 +486,7 @@ export async function createLiveMessage(title, intro = "Starting...") {
 
   async function upsertToolLine(name, icon, suffix = "") {
     const label = toolLabel(name);
-    const line = `${icon} ${label}${suffix ? ` ${suffix}` : ""}`;
+    const line = `${icon} ${label}${suffix ? `\n   ${suffix}` : ""}`;
     const idx = state.toolLines.findIndex((entry) => entry.includes(` ${label}`));
     if (idx >= 0) state.toolLines[idx] = line;
     else state.toolLines.push(line);
@@ -318,14 +509,14 @@ export async function createLiveMessage(title, intro = "Starting...") {
       state.intro = text;
       scheduleFlush();
     },
-    async finalize(finalText) {
+    async finalize(finalText, { actions = false } = {}) {
       if (state.flushTimer) {
         clearTimeout(state.flushTimer);
         state.flushTimer = null;
       }
       if (state.flushPromise) await state.flushPromise;
-      state.footer = finalText;
-      await flushNow();
+      state.footer = formatAgentReport(finalText);
+      await flushNow({ buttons: actions });
       _liveMessageDepth = Math.max(0, _liveMessageDepth - 1);
       typing.stop();
     },
@@ -341,6 +532,164 @@ export async function createLiveMessage(title, intro = "Starting...") {
       typing.stop();
     },
   };
+}
+
+export function formatAgentReport(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return "";
+  if (/Summary:\s*💼/i.test(raw) || /\|\s*Age:\s*.*\|\s*Val:/i.test(raw)) return formatManagementReport(raw);
+  if (/🚀\s*DEPLOYED|^DEPLOYED\b/i.test(raw)) return formatDeployReport(raw);
+  if (/⛔\s*NO DEPLOY|NO DEPLOY/i.test(raw)) return formatNoDeployReport(raw);
+  return raw;
+}
+
+function extractLineAfter(raw, label) {
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const idx = lines.findIndex((line) => line.toUpperCase() === label.toUpperCase());
+  return idx >= 0 ? lines[idx + 1] || null : null;
+}
+
+function extractSection(raw, label, nextLabels = []) {
+  const lines = raw.split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim().toUpperCase() === label.toUpperCase());
+  if (start < 0) return null;
+  const next = lines.findIndex((line, i) =>
+    i > start && nextLabels.includes(line.trim().toUpperCase())
+  );
+  return lines.slice(start + 1, next > start ? next : undefined).join("\n").trim() || null;
+}
+
+function firstMatch(raw, pattern) {
+  const match = raw.match(pattern);
+  return match?.[1]?.trim() || null;
+}
+
+function formatDeployReport(raw) {
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const titleIdx = lines.findIndex((line) => /DEPLOYED/i.test(line));
+  const pair = lines[titleIdx + 1] || firstMatch(raw, /POOL:\s*([^\n]+)/i) || "Unknown pool";
+  const pool = lines[titleIdx + 2] || null;
+  const amount = firstMatch(raw, /◎\s*([^|]+)\|/i) || firstMatch(raw, /^Amount:\s*([^\n]+)/im);
+  const range = firstMatch(raw, /^Range:\s*([^\n]+)/im);
+  const feeTvl = firstMatch(raw, /^Fee\/TVL:\s*([^\n]+)/im);
+  const volume = firstMatch(raw, /^Volume:\s*([^\n]+)/im);
+  const tvl = firstMatch(raw, /^TVL:\s*([^\n]+)/im);
+  const organic = firstMatch(raw, /^Organic:\s*([^\n]+)/im);
+  const risk = extractSection(raw, "RISK", ["WHY THIS WON"]) || "n/a";
+  const why = extractSection(raw, "WHY THIS WON", []) || "";
+
+  return [
+    "🚀 DEPLOYED",
+    "",
+    pair,
+    pool ? `Pool: ${pool}` : null,
+    "",
+    amount ? `Size: ${amount}` : null,
+    range ? `Range: ${range}` : null,
+    "",
+    "Market",
+    feeTvl ? `Fee/TVL: ${feeTvl}` : null,
+    volume ? `Volume: ${volume}` : null,
+    tvl ? `TVL: ${tvl}` : null,
+    organic ? `Organic: ${organic}` : null,
+    "",
+    "Risk",
+    risk,
+    why ? "" : null,
+    why ? "Why" : null,
+    why ? compactText(why, 700) : null,
+  ].filter(Boolean).join("\n").slice(0, 4096);
+}
+
+function formatNoDeployReport(raw) {
+  const best = extractLineAfter(raw, "BEST LOOKING CANDIDATE");
+  const why = extractSection(raw, "WHY SKIPPED", ["REJECTED"]) || firstMatch(raw, /Reason:\s*([\s\S]+)/i) || "";
+  const rejected = extractSection(raw, "REJECTED", []) || "";
+  return [
+    "⛔ NO DEPLOY",
+    "",
+    best ? `Best: ${best}` : "Best: none",
+    "",
+    "Reason",
+    compactText(why, 900) || "No qualifying entry.",
+    rejected ? "" : null,
+    rejected ? "Rejected" : null,
+    rejected ? compactText(rejected, 900) : null,
+  ].filter(Boolean).join("\n").slice(0, 4096);
+}
+
+function formatManagementReport(raw) {
+  const summary = firstMatch(raw, /^Summary:\s*([^\n]+)/im);
+  const body = summary ? raw.replace(/^Summary:\s*[^\n]+/im, "").trim() : raw;
+  const blocks = body
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .filter((block) => !/^Summary:/i.test(block));
+
+  const positions = blocks
+    .filter((block) => /\|\s*Age:/.test(block) && /\|\s*Val:/.test(block))
+    .map(formatManagementPositionBlock)
+    .filter(Boolean);
+
+  const extra = blocks
+    .filter((block) => !(/\|\s*Age:/.test(block) && /\|\s*Val:/.test(block)))
+    .join("\n\n")
+    .trim();
+  const extraMeaningful = extra && !/^No tool actions needed\.?$/i.test(extra);
+
+  return [
+    "🔄 MANAGEMENT CYCLE",
+    "━━━━━━━━━━━━━━━━",
+    summary ? formatManagementSummary(summary) : null,
+    positions.length ? "" : null,
+    positions.join("\n\n"),
+    extraMeaningful ? "" : null,
+    extraMeaningful ? "🛠️ Actions" : null,
+    extraMeaningful ? compactText(extra, 900) : null,
+  ].filter(Boolean).join("\n").slice(0, 4096);
+}
+
+function formatManagementSummary(summary) {
+  const positions = firstMatch(summary, /💼\s*([0-9]+)\s+positions/i);
+  const totalValue = firstMatch(summary, /positions\s*\|\s*([^|]+?)\s*\|\s*fees:/i);
+  const fees = firstMatch(summary, /fees:\s*([^|]+?)\s*\|/i);
+  const action = summary.split("|").pop()?.trim();
+  return [
+    "📌 Summary",
+    positions ? `📂 Positions: ${positions}` : null,
+    totalValue ? `💼 Value: ${totalValue}` : null,
+    fees ? `💎 Fees: ${fees}` : null,
+    action ? `🎯 Action: ${action}` : null,
+  ].filter(Boolean).join("\n");
+}
+
+function formatManagementPositionBlock(block) {
+  const lines = block.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const first = lines[0] || "";
+  const pair = firstMatch(first, /^\*?\*?([^|*]+?)\*?\*?\s*\|/) || "Position";
+  const age = firstMatch(first, /Age:\s*([^|]+)/i);
+  const pnl = firstMatch(first, /PnL:\s*([^|]+)/i);
+  const yieldPct = firstMatch(first, /Yield:\s*([^|]+)/i);
+  const range = firstMatch(first, /\|\s*(🟢\s*IN|🔴\s*OOR[^|]*)\s*\|/i);
+  const action = first.split("|").map((part) => part.trim()).filter(Boolean).pop();
+  const notes = lines.slice(1).join("\n");
+
+  return [
+    `📍 ${pair.trim()}`,
+    age ? `⏱ Age: ${age.trim()}` : null,
+    pnl ? `📈 PnL: ${pnl.trim()}` : null,
+    yieldPct ? `🌾 Yield: ${yieldPct.trim()}` : null,
+    range ? `📏 Range: ${range.replace("🟢 IN", "🟢 IN RANGE").trim()}` : null,
+    action ? `🎯 Action: ${action}` : null,
+    notes ? `📝 ${notes}` : null,
+  ].filter(Boolean).join("\n");
+}
+
+function compactText(text, maxLen) {
+  const clean = String(text || "").replace(/\n{3,}/g, "\n\n").trim();
+  if (clean.length <= maxLen) return clean;
+  return `${clean.slice(0, Math.max(0, maxLen - 1)).trim()}…`;
 }
 
 
@@ -390,6 +739,7 @@ async function poll(onMessage) {
 export function startPolling(onMessage) {
   if (!TOKEN) return;
   _polling = true;
+  setupBotCommands().catch((error) => log("telegram_warn", `setMyCommands failed: ${error.message}`));
   poll(onMessage); // fire-and-forget
   log("telegram", "Bot polling started");
 }
@@ -399,7 +749,7 @@ export function stopPolling() {
 }
 
 // ─── Notification helpers ────────────────────────────────────────
-export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, rangeCoverage, binStep, baseFee }) {
+export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, rangeCoverage, binStep, baseFee, indicatorReason }) {
   if (hasActiveLiveMessage()) return;
   const priceStr = priceRange
     ? `Price range: ${priceRange.min < 0.0001 ? priceRange.min.toExponential(3) : priceRange.min.toFixed(6)} – ${priceRange.max < 0.0001 ? priceRange.max.toExponential(3) : priceRange.max.toFixed(6)}\n`
@@ -410,24 +760,121 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
   const poolStr = (binStep || baseFee)
     ? `Bin step: ${binStep ?? "?"}  |  Base fee: ${baseFee != null ? baseFee + "%" : "?"}\n`
     : "";
+  const indStr = indicatorReason ? `Indicator: ${indicatorReason}\n` : "";
   await sendHTML(
     `✅ <b>Deployed</b> ${pair}\n` +
     `Amount: ${amountSol} SOL\n` +
     priceStr +
     coverageStr +
     poolStr +
+    indStr +
     `Position: <code>${position?.slice(0, 8)}...</code>\n` +
     `Tx: <code>${tx?.slice(0, 16)}...</code>`
   );
 }
 
-export async function notifyClose({ pair, pnlUsd, pnlPct }) {
+export async function notifyClose({ pair, pnlUsd, pnlPct, feesUsd = null, minutesHeld = null, reason = null, pnlSol = null, feesSol = null, strategy = null, binStep = null, poolAddress = null, position = null }) {
   if (hasActiveLiveMessage()) return;
-  const sign = pnlUsd >= 0 ? "+" : "";
-  await sendHTML(
-    `🔒 <b>Closed</b> ${pair}\n` +
-    `PnL: ${sign}$${(pnlUsd ?? 0).toFixed(2)} (${sign}${(pnlPct ?? 0).toFixed(2)}%)`
-  );
+
+  const pct = Number(pnlPct ?? 0);
+  const val = Number(pnlSol ?? pnlUsd ?? 0);
+  
+  // Use the actual amount to determine win/loss if available, to catch very small negative amounts
+  // that round to 0.00%
+  const isWin = val > 0 || (val === 0 && pct > 0);
+  const isLoss = val < 0 || (val === 0 && pct < 0);
+  const isBE = !isWin && !isLoss;
+
+  // ─── Determine display mode (SOL vs USD) ───
+  let pnlDisplay, feesDisplay, unit;
+  try {
+    const cfgPath = path.join(__dirname, "user-config.json");
+    const cfg = fs.existsSync(cfgPath) ? JSON.parse(fs.readFileSync(cfgPath, "utf8")) : {};
+    if (cfg.solMode) {
+      const pnlVal = Number(pnlSol ?? pnlUsd ?? 0);
+      const feesVal = Number(feesSol ?? feesUsd ?? 0);
+      pnlDisplay = `${pnlVal >= 0 ? "+" : ""}${pnlVal.toFixed(4)} SOL`;
+      feesDisplay = feesVal != null && feesVal > 0 ? `${feesVal.toFixed(4)} SOL` : null;
+      unit = "SOL";
+    } else {
+      const pnlVal = Number(pnlUsd ?? 0);
+      const feesVal = Number(feesUsd ?? 0);
+      pnlDisplay = `${pnlVal >= 0 ? "+" : ""}$${Math.abs(pnlVal).toFixed(2)}`;
+      feesDisplay = feesVal != null && feesVal > 0 ? `$${feesVal.toFixed(2)}` : null;
+      unit = "USD";
+    }
+  } catch {
+    const pnlVal = Number(pnlUsd ?? 0);
+    pnlDisplay = `${pnlVal >= 0 ? "+" : ""}$${Math.abs(pnlVal).toFixed(2)}`;
+    feesDisplay = feesUsd != null && Number(feesUsd) > 0 ? `$${Number(feesUsd).toFixed(2)}` : null;
+    unit = "USD";
+  }
+
+  // ─── Duration formatting ───
+  let durationStr = null;
+  if (minutesHeld != null) {
+    const mins = Number(minutesHeld);
+    if (mins >= 1440) durationStr = `${(mins / 1440).toFixed(1)}d`;
+    else if (mins >= 60) durationStr = `${Math.floor(mins / 60)}h ${mins % 60}m`;
+    else durationStr = `${mins}m`;
+  }
+
+  const pctSign = pct >= 0 ? "+" : "";
+  const pctDisplay = `${pctSign}${pct.toFixed(2)}%`;
+  const absPct = Math.abs(pct);
+
+  let displayStrategy = strategy;
+  try {
+    const activeStrat = getActiveStrategy();
+    if (activeStrat && activeStrat.name) {
+      displayStrategy = activeStrat.name
+        .replace("LPArmy ", "")
+        .replace("Single-Sided ", "1-Side ")
+        .replace("Conservative ", "Cons. ");
+    } else if (strategy) {
+      displayStrategy = strategy === "bid_ask" ? "Bid-Ask" : strategy.charAt(0).toUpperCase() + strategy.slice(1);
+    }
+  } catch (e) {
+    if (strategy) displayStrategy = strategy === "bid_ask" ? "Bid-Ask" : strategy.charAt(0).toUpperCase() + strategy.slice(1);
+  }
+
+  try {
+    const imageBuffer = await generatePnLImage({
+      pair: pair || "UNKNOWN",
+      pnlDisplay,
+      pctDisplay,
+      isWin,
+      isLoss,
+      absPct,
+      feesDisplay,
+      durationStr,
+      strategy: displayStrategy,
+      binStep,
+      reason
+    });
+
+    const stratInfo = displayStrategy ? `\nStrategy: <b>${displayStrategy}</b>` : "";
+    const caption = isWin
+      ? `✨ <i>Position closed with profit. Fees captured successfully.</i>${stratInfo}`
+      : isLoss
+        ? `⚡ <i>Exit executed to limit risk per strategy rules.</i>${stratInfo}`
+        : `💫 <i>Position closed at break-even.</i>${stratInfo}`;
+
+    await sendPhoto(imageBuffer, caption);
+  } catch (error) {
+    log("telegram_error", `Failed to generate PnL image: ${error.message}`);
+    // Fallback to text
+    const headerIcon = isWin ? "🟢" : isLoss ? "🔴" : "⚪";
+    await sendHTML(
+      `${headerIcon} <b>POSITION CLOSED</b>\n` +
+      `📍 <b>${escapeHtml(pair)}</b>\n` +
+      `PnL: <b>${pnlDisplay} (${pctDisplay})</b>\n` +
+      (displayStrategy ? `Strategy: <b>${displayStrategy}</b>\n` : '') +
+      (feesDisplay ? `Fees: ${feesDisplay}\n` : '') +
+      (durationStr ? `Held: ${durationStr}\n` : '') +
+      (reason ? `Exit: ${escapeHtml(reason)}` : '')
+    );
+  }
 }
 
 export async function notifySwap({ inputSymbol, outputSymbol, amountIn, amountOut, tx }) {
@@ -454,4 +901,11 @@ function sleep(ms) {
 function fmtPct(value) {
   const n = Number(value);
   return Number.isFinite(n) ? `${n.toFixed(2)}%` : "?";
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }

@@ -234,26 +234,59 @@ export async function getPriceInfo(tokenAddress, chainIndex = CHAIN_SOLANA) {
   const serverPayload = await getServerOkxEnrichmentOrNull(tokenAddress, chainIndex);
   if (serverPayload?.price) return serverPayload.price;
 
-  const data = await okxPost("/api/v6/dex/market/price-info", [
-    { chainIndex, tokenContractAddress: tokenAddress },
-  ]);
-  const d = Array.isArray(data) ? data[0] : data;
-  if (!d) return null;
-  const price    = parseFloat(d.price    || 0);
-  const maxPrice = parseFloat(d.maxPrice || 0);
-  return {
-    price,
-    ath:              maxPrice,
-    atl:              parseFloat(d.minPrice || 0),
-    price_vs_ath_pct: maxPrice > 0 ? parseFloat(((price / maxPrice) * 100).toFixed(1)) : null,
-    price_change_5m:  pct(d.priceChange5M),
-    price_change_1h:  pct(d.priceChange1H),
-    volume_5m:        pct(d.volume5M),
-    volume_1h:        pct(d.volume1H),
-    holders:          int(d.holders),
-    market_cap:       pct(d.marketCap),
-    liquidity:        pct(d.liquidity),
-  };
+  try {
+    const data = await okxPost("/api/v6/dex/market/price-info", [
+      { chainIndex, tokenContractAddress: tokenAddress },
+    ]);
+    const d = Array.isArray(data) ? data[0] : data;
+    if (!d) return null;
+    const price    = parseFloat(d.price    || 0);
+    const maxPrice = parseFloat(d.maxPrice || 0);
+    return {
+      price,
+      ath:              maxPrice,
+      atl:              parseFloat(d.minPrice || 0),
+      price_vs_ath_pct: maxPrice > 0 ? parseFloat(((price / maxPrice) * 100).toFixed(1)) : null,
+      price_change_5m:  pct(d.priceChange5M),
+      price_change_1h:  pct(d.priceChange1H),
+      volume_5m:        pct(d.volume5M),
+      volume_1h:        pct(d.volume1H),
+      holders:          int(d.holders),
+      market_cap:       pct(d.marketCap),
+      liquidity:        pct(d.liquidity),
+    };
+  } catch (okxError) {
+    // If OKX fails (e.g. region block), fall back to DexScreener API
+    try {
+      const dsRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
+      if (dsRes.ok) {
+        const dsJson = await dsRes.json();
+        const pairs = dsJson.pairs || [];
+        if (pairs.length > 0) {
+          // Sort by liquidity descending to pick the most active pool
+          const bestPair = pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+          const price = parseFloat(bestPair.priceUsd || 0);
+          return {
+            price,
+            ath: null,
+            atl: null,
+            price_vs_ath_pct: null,
+            price_change_5m: bestPair.priceChange?.m5 != null ? parseFloat(bestPair.priceChange.m5) : null,
+            price_change_1h: bestPair.priceChange?.h1 != null ? parseFloat(bestPair.priceChange.h1) : null,
+            volume_5m: null,
+            volume_1h: bestPair.volume?.h1 != null ? parseFloat(bestPair.volume.h1) : null,
+            holders: null,
+            market_cap: bestPair.fdv != null ? parseFloat(bestPair.fdv) : null,
+            liquidity: bestPair.liquidity?.usd != null ? parseFloat(bestPair.liquidity.usd) : null,
+          };
+        }
+      }
+    } catch (dsError) {
+      console.warn(`  [okx-fallback] DexScreener fallback failed: ${dsError.message}`);
+    }
+    // Re-throw if even the fallback failed, so parent catches
+    throw okxError;
+  }
 }
 
 /**

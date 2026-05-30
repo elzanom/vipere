@@ -11,10 +11,10 @@ Pools are pre-filtered for safety:
 - No critical warnings on base/quote tokens
 - No high single ownership on base token
 - Base token market cap >= $150k
-- Base token holders >= 100
+- Base token holders >= 500
 - Volume >= $1k (in timeframe)
 - Active TVL >= $10k
-- Fee/Active TVL ratio >= 0.01 (in timeframe)
+- Fee/Active TVL ratio >= 0.05 before dynamic floor adjustment (in timeframe)
 - Both tokens organic score >= 60
 
 Returns condensed pool data: address, name, tokens, bin_step, fee_pct,
@@ -31,8 +31,8 @@ Use this as the primary tool for finding new LP opportunities.`,
           },
           timeframe: {
             type: "string",
-            enum: ["1h", "4h", "12h", "24h"],
-            description: "Timeframe for metrics. Use 24h for general screening, 1h for momentum."
+            enum: ["5m", "15m", "30m", "1h", "2h", "4h", "12h", "24h"],
+            description: "Timeframe for metrics. Short timeframes use 30m volatility; 4h+ is usually better for new deployment screening."
           },
           category: {
             type: "string",
@@ -142,9 +142,7 @@ HARD RULES:
 Guidelines (only when user hasn't specified):
 - Strategy: use the active strategy's lp_strategy field (bid_ask or spot)
 - Bins: choose from configured minBinsBelow/maxBinsBelow by positive volatility. The hard lower floor is 35 bins.
-- Deposit: single-sided SOL only: set amount_y/amount_sol, keep amount_x=0.
-
-WARNING: This executes a real on-chain transaction. Check DRY_RUN mode.`,
+- Deposit: single-sided SOL only: set amount_y/amount_sol, keep amount_x=0.`,
       parameters: {
         type: "object",
         properties: {

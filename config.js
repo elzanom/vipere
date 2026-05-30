@@ -40,6 +40,7 @@ if (u.llmApiKey)  process.env.LLM_API_KEY       ||= u.llmApiKey;
 if (u.dryRun !== undefined) process.env.DRY_RUN ||= String(u.dryRun);
 if (u.publicApiKey) process.env.PUBLIC_API_KEY ||= u.publicApiKey;
 if (u.agentMeridianApiUrl) process.env.AGENT_MERIDIAN_API_URL ||= u.agentMeridianApiUrl;
+if (u.gmgnApiKey) process.env.GMGN_API_KEY ||= u.gmgnApiKey;
 
 const indicatorUserConfig = u.chartIndicators ?? {};
 
@@ -63,6 +64,7 @@ export const config = {
   screening: {
     excludeHighSupplyConcentration: u.excludeHighSupplyConcentration ?? true,
     minFeeActiveTvlRatio: u.minFeeActiveTvlRatio ?? 0.05,
+    maxVolatility: u.maxVolatility ?? 15.0,
     minTvl:            u.minTvl            ?? 10_000,
     maxTvl:            u.maxTvl !== undefined ? u.maxTvl : 150_000,
     minVolume:         u.minVolume         ?? 500,
@@ -95,6 +97,7 @@ export const config = {
     minClaimAmount:        u.minClaimAmount        ?? 5,
     autoSwapAfterClaim:    u.autoSwapAfterClaim    ?? false,
     outOfRangeBinsToClose: u.outOfRangeBinsToClose ?? 10,
+    autoRebalanceEnabled:  u.autoRebalanceEnabled  ?? false, // disabled by default in meridian for safety
     outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? 30,
     oorCooldownTriggerCount: u.oorCooldownTriggerCount ?? 3,
     oorCooldownHours:       u.oorCooldownHours       ?? 12,
@@ -106,6 +109,9 @@ export const config = {
     minVolumeToRebalance:  u.minVolumeToRebalance  ?? 1000,
     stopLossPct:           u.stopLossPct           ?? u.emergencyPriceDropPct ?? -50,
     takeProfitPct:         u.takeProfitPct         ?? u.takeProfitFeePct ?? 5,
+    partialTakeProfitEnabled: u.partialTakeProfitEnabled ?? false,
+    partialTakeProfitPct:  u.partialTakeProfitPct  ?? 15,
+    partialTakeProfitScale: u.partialTakeProfitScale ?? 0.5,
     minFeePerTvl24h:       u.minFeePerTvl24h       ?? 7,
     minAgeBeforeYieldCheck: u.minAgeBeforeYieldCheck ?? 60, // minutes before low yield can trigger close
     minSolToOpen:          u.minSolToOpen          ?? 0.55,
@@ -119,6 +125,16 @@ export const config = {
     pnlSanityMaxDiffPct:   u.pnlSanityMaxDiffPct   ?? 5,    // max allowed diff between reported and derived pnl % before ignoring a tick
     // SOL mode — positions, PnL, and balances reported in SOL instead of USD
     solMode:               u.solMode               ?? false,
+    // Kelly Criterion — dynamic position sizing based on historical win rate
+    kellyEnabled:          u.kellyEnabled          ?? true,
+    kellyMinScale:         u.kellyMinScale         ?? 0.20, // min position size as fraction of free balance
+    kellyMaxScale:         u.kellyMaxScale         ?? 0.50, // max position size as fraction of free balance
+    kellyLookbackDays:     u.kellyLookbackDays     ?? 30,   // days of history to compute win rate
+    kellyMinSamples:       u.kellyMinSamples       ?? 10,   // minimum closed positions before Kelly activates
+    // Macro Guard — auto-pause on SOL price crash
+    macroPanicThreshold:      u.macroPanicThreshold      ?? -5,      // % drop in 1h to trigger panic
+    macroPanicMode:           u.macroPanicMode           ?? "pause",  // "pause" | "close_all"
+    macroPanicRecoverThreshold: u.macroPanicRecoverThreshold ?? -2,  // % 1h change to lift panic
   },
 
   // ─── Strategy Mapping ───────────────────
@@ -179,6 +195,11 @@ export const config = {
     lpAgentRelayEnabled: u.lpAgentRelayEnabled ?? false,
   },
 
+  gmgn: {
+    apiKey: nonEmptyString(process.env.GMGN_API_KEY, u.gmgnApiKey),
+    useGmgnApi: u.useGmgnApi ?? false,
+  },
+
   jupiter: {
     // Internal Jupiter Ultra settings; override by env only, do not expose in user-config.
     apiKey: process.env.JUPITER_API_KEY ?? "",
@@ -223,6 +244,7 @@ export function computeDeployAmount(walletSol) {
   const floor    = config.management.deployAmountSol;
   const ceil     = config.risk.maxDeployAmount;
   const deployable = Math.max(0, walletSol - reserve);
+  if (deployable < floor) return 0;
   const dynamic    = deployable * pct;
   const result     = Math.min(ceil, Math.max(floor, dynamic));
   return parseFloat(result.toFixed(2));
@@ -239,6 +261,9 @@ export function reloadScreeningThresholds() {
     const fresh = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
     const s = config.screening;
     if (fresh.minFeeActiveTvlRatio != null) s.minFeeActiveTvlRatio = fresh.minFeeActiveTvlRatio;
+    if (fresh.gmgnApiKey !== undefined) config.gmgn.apiKey = fresh.gmgnApiKey;
+    if (fresh.useGmgnApi !== undefined) config.gmgn.useGmgnApi = fresh.useGmgnApi;
+    if (fresh.maxVolatility != null) s.maxVolatility = fresh.maxVolatility;
     if (fresh.minTokenFeesSol  != null) s.minTokenFeesSol  = fresh.minTokenFeesSol;
     if (fresh.maxTop10Pct      != null) s.maxTop10Pct      = fresh.maxTop10Pct;
     if (fresh.useDiscordSignals !== undefined) s.useDiscordSignals = fresh.useDiscordSignals;

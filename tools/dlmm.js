@@ -20,6 +20,7 @@ import {
   recordClaim,
   recordClose,
   getTrackedPosition,
+  getTrackedPositions,
   minutesOutOfRange,
   syncOpenPositions,
 } from "../state.js";
@@ -434,6 +435,23 @@ async function getPoolMetadata(poolAddress) {
   }
 }
 
+function isGenericPoolName(name, poolAddress = "") {
+  if (!name) return true;
+  const text = String(name);
+  if (text.startsWith("Pool_")) return true;
+  return poolAddress && text === String(poolAddress);
+}
+
+async function resolvePoolDisplayName({ tracked = null, posDetails = null, poolAddress = null } = {}) {
+  if (posDetails?.pair && !isGenericPoolName(posDetails.pair, poolAddress)) return posDetails.pair;
+  if (tracked?.pool_name && !isGenericPoolName(tracked.pool_name, poolAddress)) return tracked.pool_name;
+  if (poolAddress) {
+    const meta = await getPoolMetadata(poolAddress).catch(() => null);
+    if (meta?.name && !isGenericPoolName(meta.name, poolAddress)) return meta.name;
+  }
+  return tracked?.pool_name || posDetails?.pair || poolAddress || "position";
+}
+
 // ─── Get Active Bin ────────────────────────────────────────────
 export async function getActiveBin({ pool_address }) {
   pool_address = normalizeMint(pool_address);
@@ -486,6 +504,10 @@ export async function deployPosition({
   const { StrategyType, getBinIdFromPrice, getPriceOfBinByBinId } = await getDLMM();
   const pool = await getPool(pool_address);
   const baseMint = pool.lbPair.tokenXMint.toString();
+  const signalSnapshot = getAndClearStagedSignals(pool_address, baseMint) || null;
+  const indReason = signalSnapshot?.indicator_confirmation?.reason 
+    ? ` | Ind: ${signalSnapshot.indicator_confirmation.reason}` 
+    : "";
   if (isBaseMintOnCooldown(baseMint)) {
     log("deploy", `Base mint ${baseMint.slice(0, 8)} is on cooldown — skipping deploy for pool ${pool_address.slice(0, 8)}`);
     return { success: false, error: "Token on cooldown — recently closed out-of-range too many times. Try a different token." };
@@ -684,13 +706,12 @@ export async function deployPosition({
 
       const positionAddress = matching?.position || null;
       if (positionAddress) {
-        const signalSnapshot = config.darwin?.enabled
-          ? getAndClearStagedSignals(pool_address, baseMint)
-          : null;
+        const finalSignalSnapshot = config.darwin?.enabled ? signalSnapshot : null;
         trackPosition({
           position: positionAddress,
           pool: pool_address,
           pool_name,
+          base_mint: baseMint,
           strategy: activeStrategy,
           bin_range: { min: minBinId, max: maxBinId, bins_below: activeBinsBelow, bins_above: activeBinsAbove },
           bin_step,
@@ -701,7 +722,7 @@ export async function deployPosition({
           amount_x: finalAmountX,
           active_bin: activeBin.binId,
           initial_value_usd,
-          signal_snapshot: signalSnapshot,
+          signal_snapshot: finalSignalSnapshot,
         });
       }
 
@@ -760,10 +781,7 @@ export async function deployPosition({
   const wallet = getWallet();
   const newPosition = Keypair.generate();
 
-  log("deploy", `Pool: ${pool_address}`);
-  log("deploy", `Strategy: ${activeStrategy}, Bins: ${minBinId} to ${maxBinId} (${totalBins} bins${isWideRange ? " — WIDE RANGE" : ""})`);
-  log("deploy", `Amount: ${finalAmountX} X, ${finalAmountY} Y`);
-  log("deploy", `Position: ${newPosition.publicKey.toString()}`);
+  log("deploy", `Deploy ${activeStrategy} (${totalBins} bins${isWideRange ? " WIDE" : ""}) to ${pool_address.slice(0, 8)} | Amt: ${finalAmountY} Y | Pos: ${newPosition.publicKey.toString().slice(0, 8)}${indReason}`);
 
   try {
     const txHashes = [];
@@ -822,13 +840,12 @@ export async function deployPosition({
     log("deploy", `SUCCESS — ${txHashes.length} tx(s): ${txHashes[0]}`);
 
     _positionsCacheAt = 0;
-    const signalSnapshot = config.darwin?.enabled
-      ? getAndClearStagedSignals(pool_address, baseMint)
-      : null;
+    const finalSignalSnapshot = config.darwin?.enabled ? signalSnapshot : null;
     trackPosition({
       position: newPosition.publicKey.toString(),
       pool: pool_address,
       pool_name,
+      base_mint: baseMint,
       strategy: activeStrategy,
       bin_range: { min: minBinId, max: maxBinId, bins_below: activeBinsBelow, bins_above: activeBinsAbove },
       bin_step,
@@ -839,7 +856,7 @@ export async function deployPosition({
       amount_x: finalAmountX,
       active_bin: activeBin.binId,
       initial_value_usd,
-      signal_snapshot: signalSnapshot,
+      signal_snapshot: finalSignalSnapshot,
     });
 
     appendDecision({
@@ -885,6 +902,7 @@ export async function deployPosition({
       amount_x: finalAmountX,
       amount_y: finalAmountY,
       txs: txHashes,
+      indicator_reason: indReason ? indReason.replace(" | Ind: ", "") : null,
     };
   } catch (error) {
     log("deploy_error", error.message);
@@ -1151,7 +1169,7 @@ async function fetchRawOpenPositionsFromMeridian({ walletAddress, agentId }) {
 }
 
 // ─── Get My Positions ──────────────────────────────────────────
-export async function getMyPositions({ force = false, silent = false, wallet_address = null } = {}) {
+export async function getMyPositions({ force = false, silent = false, wallet_address = null, skipLocalInjection = false } = {}) {
   let walletOverride = null;
   try {
     walletOverride = wallet_address ? new PublicKey(wallet_address).toString() : null;
@@ -1160,10 +1178,12 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
   }
 
   const useLocalWallet = !walletOverride;
-  if (useLocalWallet && !force && _positionsCache && Date.now() - _positionsCacheAt < POSITIONS_CACHE_TTL) {
+  const isDryRun = process.env.DRY_RUN === "true";
+  const shouldInjectLocalPositions = !isDryRun && !skipLocalInjection;
+  if (useLocalWallet && shouldInjectLocalPositions && !force && _positionsCache && Date.now() - _positionsCacheAt < POSITIONS_CACHE_TTL) {
     return _positionsCache;
   }
-  if (useLocalWallet && _positionsInflight) return _positionsInflight;
+  if (useLocalWallet && shouldInjectLocalPositions && _positionsInflight) return _positionsInflight;
 
   let walletAddress;
   try {
@@ -1193,24 +1213,106 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
     // Detailed range data stays on Meteora PnL API; value/PnL can be overridden by LPAgent below.
     if (!silent) log("positions", "Fetching portfolio via Meteora portfolio API...");
     const portfolioUrl = `https://dlmm.datapi.meteora.ag/portfolio/open?user=${walletAddress}`;
-    const res = await fetch(portfolioUrl);
-    if (!res.ok) throw new Error(`Portfolio API ${res.status}: ${await res.text().catch(() => "")}`);
-    const portfolio = await res.json();
+    let pools = [];
+    try {
+      const res = await fetch(portfolioUrl);
+      if (!res.ok) throw new Error(`Portfolio API ${res.status}: ${await res.text().catch(() => "")}`);
+      const portfolio = await res.json();
+      pools = portfolio.pools || [];
+    } catch (error) {
+      if (!relayLpAgentByPosition || Object.keys(relayLpAgentByPosition).length === 0) {
+        throw error;
+      }
 
-    const pools = portfolio.pools || [];
+      log("positions_warn", `Portfolio fetch failed; using relay positions only: ${error.message}`);
+      const poolsByAddress = new Map();
+      for (const row of Object.values(relayLpAgentByPosition)) {
+        const poolAddress = row?.poolAddress || row?.pool || row?.pool_id || row?.poolId;
+        const positionAddress = row?.position || row?.id || row?.tokenId;
+        if (!poolAddress || !positionAddress) continue;
+
+        let poolEntry = poolsByAddress.get(poolAddress);
+        if (!poolEntry) {
+          poolEntry = {
+            poolAddress,
+            listPositions: [],
+            tokenXMint: row?.tokenXMint || row?.base_mint || row?.baseMint || row?.baseMintAddress || null,
+            tokenX: row?.tokenX || row?.tokenXSymbol || row?.baseSymbol || row?.base_token_symbol || "TOKEN_X",
+            tokenY: row?.tokenY || row?.tokenYSymbol || row?.quoteSymbol || row?.quote_token_symbol || "TOKEN_Y",
+          };
+          poolsByAddress.set(poolAddress, poolEntry);
+        }
+        if (!poolEntry.listPositions.includes(positionAddress)) {
+          poolEntry.listPositions.push(positionAddress);
+        }
+      }
+      pools = [...poolsByAddress.values()];
+    }
+
+    // Inject any locally registered active position that is missing from Meteora's portfolio API
+    if (shouldInjectLocalPositions) {
+      try {
+        const { getTrackedPositions } = await import("../state.js");
+        const localOpen = getTrackedPositions(true); // openOnly = true
+        const SYNC_GRACE_MS = 5 * 60_000;
+        for (const local of localOpen) {
+          const deployedAt = local.deployed_at ? new Date(local.deployed_at).getTime() : 0;
+          const withinGrace = (Date.now() - deployedAt) < SYNC_GRACE_MS;
+          if (!withinGrace) {
+            continue; // let syncOpenPositions handle cleaning this up
+          }
+          const alreadyInPortfolio = pools.some(
+            (p) => p.poolAddress === local.pool && p.listPositions?.includes(local.position)
+          );
+          if (!alreadyInPortfolio) {
+            if (!silent) {
+              log(
+                "positions",
+                `Injecting locally tracked open position ${local.position.slice(0, 8)} for pool ${local.pool.slice(0, 8)} (not yet indexed by Meteora API)`
+              );
+            }
+            let poolEntry = pools.find((p) => p.poolAddress === local.pool);
+            if (!poolEntry) {
+              poolEntry = {
+                poolAddress: local.pool,
+                listPositions: [],
+                tokenXMint: local.base_mint,
+              };
+              pools.push(poolEntry);
+            }
+            if (!poolEntry.listPositions.includes(local.position)) {
+              poolEntry.listPositions.push(local.position);
+            }
+          }
+        }
+      } catch (e) {
+        log("positions_warn", `Failed to inject local open positions: ${e.message}`);
+      }
+    }
+
     log("positions", `Found ${pools.length} pool(s) with open positions`);
 
     // Fetch bin data (lowerBinId, upperBinId, poolActiveBinId) for all pools in parallel
     // Needed for rules 3 & 4 (active_bin vs upper_bin comparison)
     const binDataByPool = {};
     const pnlMaps = await Promise.all(pools.map(pool => fetchDlmmPnlForPool(pool.poolAddress, walletAddress)));
-    pools.forEach((pool, i) => { binDataByPool[pool.poolAddress] = pnlMaps[i]; });
+    pools.forEach((pool, i) => { binDataByPool[pool.poolAddress] = pnlMaps[i] || {}; });
+
     const lpAgentByPosition = relayLpAgentByPosition || await fetchLpAgentOpenPositions(walletAddress);
 
     const positions = [];
     for (const pool of pools) {
       for (const positionAddress of (pool.listPositions || [])) {
         const tracked = getTrackedPosition(positionAddress);
+        if (!isDryRun && tracked?.closed) {
+          if (!silent) {
+            log(
+              "positions",
+              `Skipping closed position ${positionAddress.slice(0, 8)} (local registry shows closed, but Meteora API still lists it)`
+            );
+          }
+          continue;
+        }
         const isOOR = pool.outOfRange || pool.positionsOutOfRange?.includes(positionAddress);
 
         if (isOOR) markOutOfRange(positionAddress);
@@ -1225,6 +1327,11 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
         const upperBin  = binData?.upperBinId      ?? tracked?.bin_range?.max ?? null;
         const activeBin = binData?.poolActiveBinId ?? tracked?.bin_range?.active ?? null;
         const lpData = lpAgentByPosition[positionAddress] || null;
+        const pairName = isDryRun
+          ? (tracked?.pool_name || `${pool.tokenX}/${pool.tokenY}`)
+          : (tracked?.pool_name && !tracked.pool_name.startsWith("Pool_")
+            ? tracked.pool_name
+            : (await getPoolMetadata(pool.poolAddress).catch(() => null))?.name || tracked?.pool_name || `${pool.tokenX}/${pool.tokenY}`);
 
         const ageFromState = tracked?.deployed_at
           ? Math.floor((Date.now() - new Date(tracked.deployed_at).getTime()) / 60000)
@@ -1250,7 +1357,7 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
         positions.push({
           position:           positionAddress,
           pool:               pool.poolAddress,
-          pair:               tracked?.pool_name || `${pool.tokenX}/${pool.tokenY}`,
+          pair:               pairName,
           base_mint:          pool.tokenXMint,
           lower_bin:          lowerBin,
           upper_bin:          upperBin,
@@ -1501,12 +1608,47 @@ export async function claimFees({ position_address }) {
 }
 
 // ─── Close Position ────────────────────────────────────────────
+function resolveTrackedPositionAddress(positionAddress) {
+  const raw = String(positionAddress || "").trim();
+  if (!raw) return raw;
+  if (getTrackedPosition(raw)) return raw;
+
+  const openPositions = getTrackedPositions(true);
+  const matches = openPositions.filter((pos) => {
+    const id = String(pos.position || "");
+    return id === raw || id.startsWith(raw);
+  });
+
+  return matches.length === 1 ? matches[0].position : raw;
+}
+
+async function isPositionSettledClosed({ poolAddress, positionAddress, walletAddress }) {
+  const closedUrl = `https://dlmm.datapi.meteora.ag/positions/${poolAddress}/pnl?user=${walletAddress}&status=closed&pageSize=50&page=1`;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(closedUrl);
+      if (res.ok) {
+        const data = await res.json();
+        const posEntry = (data.positions || []).find(
+          (entry) => entry.positionAddress === positionAddress || entry.position === positionAddress,
+        );
+        if (posEntry) return true;
+      }
+    } catch (error) {
+      log("close_warn", `Closed-status verification failed (attempt ${attempt + 1}/3): ${error.message}`);
+    }
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 3000));
+  }
+  return false;
+}
+
 export async function closePosition({ position_address, reason }) {
   position_address = normalizeMint(position_address);
   if (process.env.DRY_RUN === "true") {
     return { dry_run: true, would_close: position_address, message: "DRY RUN — no transaction sent" };
   }
 
+  position_address = normalizeMint(resolveTrackedPositionAddress(position_address));
   const tracked = getTrackedPosition(position_address);
 
   try {
@@ -1590,7 +1732,7 @@ export async function closePosition({ position_address, reason }) {
       let closedConfirmed = false;
       for (let attempt = 0; attempt < 4; attempt++) {
         try {
-          const refreshed = await getMyPositions({ force: true, silent: true });
+          const refreshed = await getMyPositions({ force: true, silent: true, skipLocalInjection: true });
           const stillOpen = refreshed?.positions?.some((p) => p.position === position_address);
           if (!stillOpen) {
             closedConfirmed = true;
@@ -1601,6 +1743,18 @@ export async function closePosition({ position_address, reason }) {
           log("close_warn", `Relay close verification failed (attempt ${attempt + 1}/4): ${e.message}`);
         }
         if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 3000));
+      }
+
+      if (!closedConfirmed) {
+        const settledClosed = await isPositionSettledClosed({
+          poolAddress,
+          positionAddress: position_address,
+          walletAddress: wallet.publicKey.toString(),
+        });
+        if (settledClosed) {
+          closedConfirmed = true;
+          log("close_warn", `Relay close verification timed out, but closed-history lookup confirmed settlement for ${position_address.slice(0, 8)}`);
+        }
       }
 
       if (!closedConfirmed) {
@@ -1714,6 +1868,9 @@ export async function closePosition({ position_address, reason }) {
           pnl_usd: pnlUsd,
           pnl_pct: pnlPct,
           base_mint: closeBaseMint,
+          minutes_held: minutesHeld,
+          strategy: tracked?.strategy,
+          bin_step: tracked?.bin_step,
         };
       }
 
@@ -1739,6 +1896,8 @@ export async function closePosition({ position_address, reason }) {
         close_txs: closeTxHashes,
         txs: txHashes,
         base_mint: livePosition?.base_mint || null,
+        strategy: tracked?.strategy,
+        bin_step: tracked?.bin_step,
       };
       } catch (relayError) {
         if (relaySubmitted) throw relayError;
@@ -1830,7 +1989,7 @@ export async function closePosition({ position_address, reason }) {
     let closedConfirmed = false;
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
-        const refreshed = await getMyPositions({ force: true, silent: true });
+        const refreshed = await getMyPositions({ force: true, silent: true, skipLocalInjection: true });
         const stillOpen = refreshed?.positions?.some((p) => p.position === position_address);
         if (!stillOpen) {
           closedConfirmed = true;
@@ -1841,6 +2000,18 @@ export async function closePosition({ position_address, reason }) {
         log("close_warn", `Close verification failed (attempt ${attempt + 1}/4): ${e.message}`);
       }
       if (attempt < 3) await new Promise((r) => setTimeout(r, 3000));
+    }
+
+    if (!closedConfirmed) {
+      const settledClosed = await isPositionSettledClosed({
+        poolAddress,
+        positionAddress: position_address,
+        walletAddress: wallet.publicKey.toString(),
+      });
+      if (settledClosed) {
+        closedConfirmed = true;
+        log("close_warn", `Close verification timed out, but closed-history lookup confirmed settlement for ${position_address.slice(0, 8)}`);
+      }
     }
 
     if (!closedConfirmed) {
@@ -1999,6 +2170,10 @@ export async function closePosition({ position_address, reason }) {
         pnl_usd: pnlUsd,
         pnl_pct: pnlPct,
         base_mint: closeBaseMint,
+        minutes_held: minutesHeld,
+        fees_earned_usd: feesUsd,
+        strategy: tracked?.strategy,
+        bin_step: tracked?.bin_step,
       };
     }
 
@@ -2022,6 +2197,8 @@ export async function closePosition({ position_address, reason }) {
       close_txs: closeTxHashes,
       txs: txHashes,
       base_mint: pool.lbPair.tokenXMint.toString(),
+      strategy: tracked?.strategy,
+      bin_step: tracked?.bin_step,
     };
   } catch (error) {
     log("close_error", error.message);

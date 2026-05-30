@@ -57,6 +57,7 @@ export function trackPosition({
   position,
   pool,
   pool_name,
+  base_mint,
   strategy,
   bin_range = {},
   amount_sol,
@@ -74,6 +75,7 @@ export function trackPosition({
     position,
     pool,
     pool_name,
+    base_mint: base_mint || null,
     strategy,
     bin_range,
     amount_sol,
@@ -95,6 +97,9 @@ export function trackPosition({
     closed_at: null,
     notes: [],
     peak_pnl_pct: 0,
+    last_known_pnl_pct: null,
+    last_known_pnl_usd: null,
+    last_known_pnl_at: null,
     pending_peak_pnl_pct: null,
     pending_peak_started_at: null,
     pending_trailing_current_pnl_pct: null,
@@ -164,6 +169,24 @@ export function recordClaim(position_address, fees_usd) {
 }
 
 /**
+ * Persist the most recent valid PnL snapshot.
+ * Called during management polling so data is never lost when OOR.
+ */
+export function updateLastKnownPnl(position_address, { pnl_pct, pnl_usd } = {}) {
+  if (pnl_pct == null && pnl_usd == null) return;
+  const state = load();
+  const pos = state.positions[position_address];
+  if (!pos || pos.closed) return;
+  let changed = false;
+  if (pnl_pct != null) { pos.last_known_pnl_pct = pnl_pct; changed = true; }
+  if (pnl_usd != null) { pos.last_known_pnl_usd = pnl_usd; changed = true; }
+  if (changed) {
+    pos.last_known_pnl_at = new Date().toISOString();
+    save(state);
+  }
+}
+
+/**
  * Append to the recent events log (shown in every prompt).
  */
 function pushEvent(state, event) {
@@ -191,13 +214,65 @@ export function recordClose(position_address, reason) {
 
 /**
  * Set a persistent instruction for a position (e.g. "hold until 5% profit").
+ * Also parses risk key=value pairs (sl=-30, tp=10, trail_trigger=5, trail_drop=2)
+ * and stores them as position-level overrides. The remaining text after parsing
+ * risk pairs is stored as the instruction.
  * Overwrites any previous instruction. Pass null to clear.
  */
 export function setPositionInstruction(position_address, instruction) {
   const state = load();
   const pos = state.positions[position_address];
   if (!pos) return false;
-  pos.instruction = sanitizeStoredText(instruction);
+
+  // Parse risk overrides from instruction string
+  const overrides = {};
+  if (instruction) {
+    const tokens = instruction.trim().split(/\s+/);
+    const nonRiskTokens = [];
+    for (const token of tokens) {
+      const eqIdx = token.indexOf("=");
+      if (eqIdx > 0) {
+        const key = token.substring(0, eqIdx).toLowerCase();
+        const val = parseFloat(token.substring(eqIdx + 1));
+        if (Number.isFinite(val)) {
+          if (key === "sl" || key === "stop_loss") {
+            overrides.stop_loss_pct = val;
+            continue;
+          }
+          if (key === "tp" || key === "take_profit") {
+            overrides.take_profit_pct = val;
+            continue;
+          }
+          if (key === "trail_trigger" || key === "trigger") {
+            overrides.trailing_trigger_pct = val;
+            continue;
+          }
+          if (key === "trail_drop" || key === "drop") {
+            overrides.trailing_drop_pct = val;
+            continue;
+          }
+        }
+      }
+      nonRiskTokens.push(token);
+    }
+    pos.instruction = sanitizeStoredText(nonRiskTokens.join(" ")) || null;
+  } else {
+    pos.instruction = null;
+  }
+
+  // Apply parsed risk overrides
+  if ("stop_loss_pct" in overrides) pos.stop_loss_pct = overrides.stop_loss_pct;
+  else pos.stop_loss_pct ??= null; // don't clear if not specified
+
+  if ("take_profit_pct" in overrides) pos.take_profit_pct = overrides.take_profit_pct;
+  else pos.take_profit_pct ??= null;
+
+  if ("trailing_trigger_pct" in overrides) pos.trailing_trigger_pct = overrides.trailing_trigger_pct;
+  else pos.trailing_trigger_pct ??= null;
+
+  if ("trailing_drop_pct" in overrides) pos.trailing_drop_pct = overrides.trailing_drop_pct;
+  else pos.trailing_drop_pct ??= null;
+
   save(state);
   log("state", `Position ${position_address} instruction set: ${pos.instruction}`);
   return true;
@@ -410,10 +485,11 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
   if (changed) save(state);
 
   // ── Stop loss ──────────────────────────────────────────────────
-  if (!pnl_pct_suspicious && currentPnlPct != null && mgmtConfig.stopLossPct != null && currentPnlPct <= mgmtConfig.stopLossPct) {
+  const effectiveStopLoss = pos.stop_loss_pct ?? mgmtConfig.stopLossPct;
+  if (!pnl_pct_suspicious && currentPnlPct != null && effectiveStopLoss != null && currentPnlPct <= effectiveStopLoss) {
     return {
       action: "STOP_LOSS",
-      reason: `Stop loss: PnL ${currentPnlPct.toFixed(2)}% <= ${mgmtConfig.stopLossPct}%`,
+      reason: `Stop loss: PnL ${currentPnlPct.toFixed(2)}% <= ${effectiveStopLoss}%`,
     };
   }
 
@@ -432,10 +508,32 @@ export function updatePnlAndCheckExits(position_address, positionData, mgmtConfi
     }
   }
 
+  // ── Partial TP ──────────────────────────────────────────────────
+  if (
+    mgmtConfig.partialTakeProfitEnabled === true &&
+    !pnl_pct_suspicious &&
+    !pos.partial_tp_taken &&
+    currentPnlPct != null &&
+    mgmtConfig.partialTakeProfitPct != null &&
+    currentPnlPct >= mgmtConfig.partialTakeProfitPct
+  ) {
+    return {
+      action: "PARTIAL_TP",
+      reason: `Partial TP: PnL ${currentPnlPct.toFixed(2)}% >= ${mgmtConfig.partialTakeProfitPct}%`,
+      current_pnl_pct: currentPnlPct,
+    };
+  }
+
   // ── Out of range too long ──────────────────────────────────────
   if (pos.out_of_range_since) {
     const minutesOOR = Math.floor((Date.now() - new Date(pos.out_of_range_since).getTime()) / 60000);
     if (minutesOOR >= mgmtConfig.outOfRangeWaitMinutes) {
+      if (mgmtConfig.autoRebalanceEnabled) {
+        return {
+          action: "REBALANCE",
+          reason: `Out of range for ${minutesOOR}m (limit: ${mgmtConfig.outOfRangeWaitMinutes}m)`,
+        };
+      }
       return {
         action: "OUT_OF_RANGE",
         reason: `Out of range for ${minutesOOR}m (limit: ${mgmtConfig.outOfRangeWaitMinutes}m)`,
@@ -510,4 +608,20 @@ export function syncOpenPositions(active_addresses) {
   }
 
   if (changed) save(state);
+}
+
+/**
+ * Partial take-profit needs an on-chain liquidity withdrawal. Keep this helper
+ * non-mutating so callers cannot accidentally record profit that was not
+ * actually realized.
+ */
+export function takePartialProfit(position_address, currentPnlUsd, scalePct = 0.5) {
+  log(
+    "state_warn",
+    `Partial TP skipped for ${position_address}: on-chain partial withdrawal is not implemented (pnl=${currentPnlUsd}, scale=${scalePct})`,
+  );
+  return {
+    success: false,
+    error: "Partial take-profit requires on-chain partial withdrawal and is not implemented.",
+  };
 }

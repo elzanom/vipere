@@ -53,7 +53,35 @@ export function listSmartWallets() {
 
 // Cache wallet positions for 5 minutes to avoid hammering RPC
 const _cache = new Map(); // address -> { positions, fetchedAt }
+const _inflight = new Map(); // address -> Promise<positions>
 const CACHE_TTL = 5 * 60 * 1000;
+const MAX_CONCURRENT_WALLET_FETCHES = 2;
+
+async function getCachedWalletPositions(wallet, getWalletPositions) {
+  const cached = _cache.get(wallet.address);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL) {
+    return cached.positions;
+  }
+
+  const existing = _inflight.get(wallet.address);
+  if (existing) return existing;
+
+  const pending = (async () => {
+    try {
+      const { positions } = await getWalletPositions({ wallet_address: wallet.address });
+      const normalized = positions || [];
+      _cache.set(wallet.address, { positions: normalized, fetchedAt: Date.now() });
+      return normalized;
+    } catch {
+      return [];
+    } finally {
+      _inflight.delete(wallet.address);
+    }
+  })();
+
+  _inflight.set(wallet.address, pending);
+  return pending;
+}
 
 export async function checkSmartWalletsOnPool({ pool_address }) {
   const { wallets: allWallets } = loadWallets();
@@ -71,21 +99,17 @@ export async function checkSmartWalletsOnPool({ pool_address }) {
 
   const { getWalletPositions } = await import("./tools/dlmm.js");
 
-  const results = await Promise.all(
-    wallets.map(async (wallet) => {
-      try {
-        const cached = _cache.get(wallet.address);
-        if (cached && Date.now() - cached.fetchedAt < CACHE_TTL) {
-          return { wallet, positions: cached.positions };
-        }
-        const { positions } = await getWalletPositions({ wallet_address: wallet.address });
-        _cache.set(wallet.address, { positions: positions || [], fetchedAt: Date.now() });
-        return { wallet, positions: positions || [] };
-      } catch {
-        return { wallet, positions: [] };
-      }
-    })
-  );
+  const results = [];
+  for (let i = 0; i < wallets.length; i += MAX_CONCURRENT_WALLET_FETCHES) {
+    const chunk = wallets.slice(i, i + MAX_CONCURRENT_WALLET_FETCHES);
+    const chunkResults = await Promise.all(
+      chunk.map(async (wallet) => ({
+        wallet,
+        positions: await getCachedWalletPositions(wallet, getWalletPositions),
+      }))
+    );
+    results.push(...chunkResults);
+  }
 
   const inPool = results
     .filter((r) => r.positions.some((p) => p.pool === pool_address))

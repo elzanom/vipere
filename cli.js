@@ -4,6 +4,8 @@
  * Direct tool invocation with JSON output. Agent-native.
  */
 
+import dns from "dns";
+dns.setDefaultResultOrder("ipv4first");
 import { loadEnv } from "./envcrypt.js";
 import { parseArgs } from "util";
 import os from "os";

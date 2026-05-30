@@ -1,4 +1,13 @@
-import { discoverPools, getPoolDetail, getTopCandidates } from "./screening.js";
+import {
+  discoverPools,
+  getDynamicMinFeeActiveTvlRatio,
+  getPoolDetail,
+  getPoolDiscoveryTimeframe,
+  getRawPoolScreeningRejectReason,
+  getTopCandidates,
+  getVolatilityTimeframe,
+  isSolQuotePool,
+} from "./screening.js";
 import {
   getActiveBin,
   deployPosition,
@@ -30,30 +39,12 @@ import { execSync, spawn } from "child_process";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USER_CONFIG_PATH = path.join(__dirname, "../user-config.json");
 const POOL_DISCOVERY_BASE = "https://pool-discovery-api.datapi.meteora.ag";
-const MIN_VOLATILITY_TIMEFRAME = "30m";
-const TIMEFRAME_MINUTES = {
-  "5m": 5,
-  "15m": 15,
-  "30m": 30,
-  "1h": 60,
-  "2h": 120,
-  "4h": 240,
-  "12h": 720,
-  "24h": 1440,
-};
 import { log, logAction } from "../logger.js";
 import { notifyDeploy, notifyClose, notifySwap } from "../telegram.js";
 
 function numberOrNull(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
-}
-
-function getVolatilityTimeframe(sourceTimeframe) {
-  const source = String(sourceTimeframe || "").trim();
-  const sourceMinutes = TIMEFRAME_MINUTES[source];
-  const minMinutes = TIMEFRAME_MINUTES[MIN_VOLATILITY_TIMEFRAME];
-  return sourceMinutes != null && sourceMinutes >= minMinutes ? source : MIN_VOLATILITY_TIMEFRAME;
 }
 
 function poolDetailTvl(pool) {
@@ -73,7 +64,7 @@ function poolDetailVolatility(pool) {
 }
 
 async function fetchFreshPoolDetail(poolAddress, timeframe = config.screening.timeframe || "5m") {
-  const encodedTimeframe = encodeURIComponent(timeframe);
+  const encodedTimeframe = encodeURIComponent(getPoolDiscoveryTimeframe(timeframe));
   const filter = encodeURIComponent(`pool_address=${poolAddress}`);
   const url = `${POOL_DISCOVERY_BASE}/pools?page_size=1&filter_by=${filter}&timeframe=${encodedTimeframe}`;
   const res = await fetch(url);
@@ -91,6 +82,38 @@ async function validateDeployPoolThresholds(args) {
     return {
       pass: false,
       reason: `Could not verify pool screening thresholds before deploy: ${error.message}`,
+    };
+  }
+
+  if (!isSolQuotePool(detail)) {
+    return {
+      pass: false,
+      reason: `Pool quote token ${detail?.token_y?.symbol || detail?.token_y?.address || "unknown"} is not SOL.`,
+    };
+  }
+
+  const volatilityTimeframe = getVolatilityTimeframe(config.screening.timeframe || "5m");
+  let volatilityDetail = detail;
+  if ((config.screening.timeframe || "5m") !== volatilityTimeframe) {
+    try {
+      volatilityDetail = await fetchFreshPoolDetail(args.pool_address, volatilityTimeframe);
+    } catch (error) {
+      return {
+        pass: false,
+        reason: `Could not verify pool ${volatilityTimeframe} volatility before deploy: ${error.message}`,
+      };
+    }
+  }
+  if (volatilityDetail?.volatility != null) {
+    detail.volatility = volatilityDetail.volatility;
+    detail.volatility_timeframe = volatilityTimeframe;
+  }
+
+  const rawRejectReason = getRawPoolScreeningRejectReason(detail, config.screening);
+  if (rawRejectReason) {
+    return {
+      pass: false,
+      reason: `Pool no longer passes screening: ${rawRejectReason}.`,
     };
   }
 
@@ -117,27 +140,37 @@ async function validateDeployPoolThresholds(args) {
   }
 
   const feeActiveTvlRatio = poolDetailFeeActiveTvlRatio(detail);
-  const minFeeActiveTvlRatio = numberOrNull(config.screening.minFeeActiveTvlRatio);
-  if (
-    minFeeActiveTvlRatio != null &&
-    minFeeActiveTvlRatio > 0 &&
-    (feeActiveTvlRatio == null || feeActiveTvlRatio < minFeeActiveTvlRatio)
-  ) {
-    return {
-      pass: false,
-      reason: `Pool fee/active-TVL ${feeActiveTvlRatio ?? "unknown"}% is below configured minFeeActiveTvlRatio ${minFeeActiveTvlRatio}%.`,
-    };
-  }
-
-  const volatilityTimeframe = getVolatilityTimeframe(config.screening.timeframe || "5m");
-  let volatilityDetail = detail;
-  if ((config.screening.timeframe || "5m") !== volatilityTimeframe) {
-    try {
-      volatilityDetail = await fetchFreshPoolDetail(args.pool_address, volatilityTimeframe);
-    } catch (error) {
+  try {
+    const universe = await discoverPools({
+      page_size: 50,
+      timeframe: config.screening.timeframe,
+      category: config.screening.category,
+    });
+    const dynamicMinFeeActiveTvlRatio = numberOrNull(
+      universe?.dynamic_min_fee_active_tvl_ratio ??
+      getDynamicMinFeeActiveTvlRatio(universe?.pools || [], config.screening.minFeeActiveTvlRatio).dynamicMinFeeActiveTvlRatio
+    );
+    if (
+      dynamicMinFeeActiveTvlRatio != null &&
+      dynamicMinFeeActiveTvlRatio > 0 &&
+      (feeActiveTvlRatio == null || feeActiveTvlRatio < dynamicMinFeeActiveTvlRatio)
+    ) {
       return {
         pass: false,
-        reason: `Could not verify pool ${volatilityTimeframe} volatility before deploy: ${error.message}`,
+        reason: `Pool fee/active-TVL ${feeActiveTvlRatio ?? "unknown"}% is below the live dynamic floor ${dynamicMinFeeActiveTvlRatio}%.`,
+      };
+    }
+  } catch (error) {
+    log("screening", `Dynamic fee floor preflight fallback for ${args.pool_address?.slice(0, 8)}: ${error.message}`);
+    const minFeeActiveTvlRatio = numberOrNull(config.screening.minFeeActiveTvlRatio);
+    if (
+      minFeeActiveTvlRatio != null &&
+      minFeeActiveTvlRatio > 0 &&
+      (feeActiveTvlRatio == null || feeActiveTvlRatio < minFeeActiveTvlRatio)
+    ) {
+      return {
+        pass: false,
+        reason: `Pool fee/active-TVL ${feeActiveTvlRatio ?? "unknown"}% is below configured minFeeActiveTvlRatio ${minFeeActiveTvlRatio}%.`,
       };
     }
   }
@@ -147,6 +180,13 @@ async function validateDeployPoolThresholds(args) {
     return {
       pass: false,
       reason: `Pool ${volatilityTimeframe} volatility ${volatility ?? "unknown"} is unusable. Refusing deploy.`,
+    };
+  }
+  const maxVolatility = numberOrNull(config.screening.maxVolatility);
+  if (maxVolatility != null && volatility > maxVolatility) {
+    return {
+      pass: false,
+      reason: `Pool ${volatilityTimeframe} volatility ${volatility} is above configured maxVolatility ${maxVolatility}.`,
     };
   }
 
@@ -167,6 +207,16 @@ async function validateDeployPoolThresholds(args) {
   }
 
   return { pass: true };
+}
+
+export async function checkDeployPreflight({ pool_address }) {
+  if (!pool_address) {
+    return {
+      pass: false,
+      reason: "pool_address is required",
+    };
+  }
+  return validateDeployPoolThresholds({ pool_address });
 }
 
 // Registered by index.js so update_config can restart cron jobs when intervals change
@@ -206,12 +256,19 @@ function normalizeConfigValue(key, value) {
     "avoidPvpSymbols",
     "blockPvpSymbols",
     "autoSwapAfterClaim",
+    "repeatDeployCooldownEnabled",
     "trailingTakeProfit",
     "solMode",
     "darwinEnabled",
     "lpAgentRelayEnabled",
+    "chartIndicatorsEnabled",
+    "requireAllIntervals",
   ]);
-  const arrayKeys = new Set(["allowedLaunchpads", "blockedLaunchpads"]);
+  const arrayKeys = new Set([
+    "allowedLaunchpads", 
+    "blockedLaunchpads",
+    "indicatorIntervals",
+  ]);
   const stringKeys = new Set([
     "timeframe",
     "category",
@@ -226,6 +283,8 @@ function normalizeConfigValue(key, value) {
     "hiveMindPullMode",
     "publicApiKey",
     "agentMeridianApiUrl",
+    "indicatorEntryPreset",
+    "indicatorExitPreset",
   ]);
   if (value === null) return null;
   if (booleanKeys.has(key)) return coerceBoolean(value, key);
@@ -291,11 +350,11 @@ const toolMap = {
   },
   get_performance_history: getPerformanceHistory,
   get_recent_decisions: ({ limit } = {}) => ({ decisions: getRecentDecisions(limit || 6) }),
-  add_strategy:        addStrategy,
-  list_strategies:     listStrategies,
-  get_strategy:        getStrategy,
+  add_strategy: addStrategy,
+  list_strategies: listStrategies,
+  get_strategy: getStrategy,
   set_active_strategy: setActiveStrategy,
-  remove_strategy:     removeStrategy,
+  remove_strategy: removeStrategy,
   get_pool_memory: getPoolMemory,
   add_pool_note: addPoolNote,
   add_to_blacklist: addToBlacklist,
@@ -308,7 +367,7 @@ const toolMap = {
     addLesson(rule, tags || [], { pinned: !!pinned, role: role || null });
     return { saved: true, rule, pinned: !!pinned, role: role || "all" };
   },
-  pin_lesson:   ({ id }) => pinLesson(id),
+  pin_lesson: ({ id }) => pinLesson(id),
   unpin_lesson: ({ id }) => unpinLesson(id),
   list_lessons: ({ role, pinned, tag, limit } = {}) => listLessons({ role, pinned, tag, limit }),
   clear_lessons: ({ mode, keyword }) => {
@@ -353,14 +412,14 @@ const toolMap = {
       discordSignalMode: ["screening", "discordSignalMode"],
       avoidPvpSymbols: ["screening", "avoidPvpSymbols"],
       blockPvpSymbols: ["screening", "blockPvpSymbols"],
-      maxBundlePct:     ["screening", "maxBundlePct"],
+      maxBundlePct: ["screening", "maxBundlePct"],
       maxBotHoldersPct: ["screening", "maxBotHoldersPct"],
       maxTop10Pct: ["screening", "maxTop10Pct"],
       allowedLaunchpads: ["screening", "allowedLaunchpads"],
       blockedLaunchpads: ["screening", "blockedLaunchpads"],
       minTokenAgeHours: ["screening", "minTokenAgeHours"],
       maxTokenAgeHours: ["screening", "maxTokenAgeHours"],
-      athFilterPct:     ["screening", "athFilterPct"],
+      athFilterPct: ["screening", "athFilterPct"],
       minFeePerTvl24h: ["management", "minFeePerTvl24h"],
       // management
       minClaimAmount: ["management", "minClaimAmount"],
@@ -596,15 +655,28 @@ export async function executeTool(name, args) {
 
     if (success) {
       if (name === "swap_token" && result.tx) {
-        notifySwap({ inputSymbol: args.input_mint?.slice(0, 8), outputSymbol: args.output_mint === "So11111111111111111111111111111111111111112" || args.output_mint === "SOL" ? "SOL" : args.output_mint?.slice(0, 8), amountIn: result.amount_in, amountOut: result.amount_out, tx: result.tx }).catch(() => {});
+        notifySwap({ inputSymbol: args.input_mint?.slice(0, 8), outputSymbol: args.output_mint === "So11111111111111111111111111111111111111112" || args.output_mint === "SOL" ? "SOL" : args.output_mint?.slice(0, 8), amountIn: result.amount_in, amountOut: result.amount_out, tx: result.tx }).catch(() => { });
       } else if (name === "deploy_position") {
-        notifyDeploy({ pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8), amountSol: args.amount_y ?? args.amount_sol ?? 0, position: result.position, tx: result.txs?.[0] ?? result.tx, priceRange: result.price_range, rangeCoverage: result.range_coverage, binStep: result.bin_step, baseFee: result.base_fee }).catch(() => {});
-      } else if (name === "close_position") {
-        notifyClose({ pair: result.pool_name || args.position_address?.slice(0, 8), pnlUsd: result.pnl_usd ?? 0, pnlPct: result.pnl_pct ?? 0 }).catch(() => {});
+        notifyDeploy({ pair: result.pool_name || args.pool_name || args.pool_address?.slice(0, 8), amountSol: args.amount_y ?? args.amount_sol ?? 0, position: result.position, tx: result.txs?.[0] ?? result.tx, priceRange: result.price_range, rangeCoverage: result.range_coverage, binStep: result.bin_step, baseFee: result.base_fee, indicatorReason: result.indicator_reason }).catch(() => { });
+      } else if (name === "close_position" && result.success === true) {
+        notifyClose({
+          pair: result.pool_name || args.position_address?.slice(0, 8),
+          pnlUsd: result.pnl_usd ?? 0,
+          pnlPct: result.pnl_pct ?? 0,
+          pnlSol: result.pnl_sol ?? null,
+          feesUsd: result.fees_earned_usd ?? result.fees_usd ?? null,
+          feesSol: result.fees_earned_sol ?? null,
+          minutesHeld: result.minutes_held ?? null,
+          reason: result.close_reason || args.reason || null,
+          strategy: result.strategy ?? null,
+          binStep: result.bin_step ?? null,
+          poolAddress: result.pool ?? args.pool_address ?? null,
+          position: args.position_address ?? null,
+        }).catch(() => { });
         // Note low-yield closes in pool memory so screener avoids redeploying
         if (args.reason && args.reason.toLowerCase().includes("yield")) {
           const poolAddr = result.pool || args.pool_address;
-          if (poolAddr) addPoolNote({ pool_address: poolAddr, note: `Closed: low yield (fee/TVL below threshold) at ${new Date().toISOString().slice(0,10)}` }).catch?.(() => {});
+          if (poolAddr) addPoolNote({ pool_address: poolAddr, note: `Closed: low yield (fee/TVL below threshold) at ${new Date().toISOString().slice(0, 10)}` }).catch?.(() => { });
         }
         // Auto-swap base token back to SOL unless user said to hold
         if (!args.skip_swap && result.base_mint) {
@@ -775,7 +847,7 @@ async function runSafetyChecks(name, args) {
         };
       }
 
-      const minDeploy = Math.max(0.1, config.management.deployAmountSol);
+      const minDeploy = Math.max(0.01, config.management.deployAmountSol);
       if (amountY < minDeploy) {
         return {
           pass: false,

@@ -5,25 +5,22 @@
   "llmApiKey": "",
   "llmModel": "minimax/minimax-m2.7",
   "dryRun": true,
-
-  "deployAmountSol": 0.5,
-  "maxPositions": 3,
-  "minSolToOpen": 0.55,
-  "maxDeployAmount": 50,
-  "gasReserve": 0.2,
-  "positionSizePct": 0.35,
-
+  "deployAmountSol": 0.05,
+  "maxPositions": 1,
+  "minSolToOpen": 0.1,
+  "maxDeployAmount": 0.1,
+  "gasReserve": 0.05,
+  "positionSizePct": 0.20,
   "strategy": "bid_ask",
   "minBinsBelow": 35,
-  "maxBinsBelow": 69,
+  "maxBinsBelow": 85,
   "defaultBinsBelow": 69,
-
-  "timeframe": "5m",
+  "timeframe": "4h",
   "category": "trending",
   "excludeHighSupplyConcentration": true,
-  "minTvl": 10000,
-  "maxTvl": 150000,
-  "minVolume": 500,
+  "minTvl": 25000,
+  "maxTvl": 5000000,
+  "minVolume": 2500,
   "minOrganic": 60,
   "minQuoteOrganic": 60,
   "minHolders": 500,
@@ -32,6 +29,7 @@
   "minBinStep": 80,
   "maxBinStep": 125,
   "minFeeActiveTvlRatio": 0.05,
+  "maxVolatility": 15.0,
   "minTokenFeesSol": 30,
   "useDiscordSignals": false,
   "discordSignalMode": "merge",
@@ -45,7 +43,6 @@
   "minTokenAgeHours": null,
   "maxTokenAgeHours": null,
   "athFilterPct": null,
-
   "minClaimAmount": 5,
   "autoSwapAfterClaim": false,
   "outOfRangeBinsToClose": 10,
@@ -62,18 +59,15 @@
   "trailingDropPct": 1.5,
   "pnlSanityMaxDiffPct": 5,
   "solMode": false,
-
   "managementIntervalMin": 10,
   "screeningIntervalMin": 30,
   "healthCheckIntervalMin": 60,
-
   "temperature": 0.373,
   "maxTokens": 4096,
   "maxSteps": 20,
   "managementModel": "minimax/minimax-m2.5",
   "screeningModel": "minimax/minimax-m2.5",
   "generalModel": "minimax/minimax-m2.7",
-
   "darwinEnabled": true,
   "darwinWindowDays": 60,
   "darwinRecalcEvery": 5,
@@ -82,7 +76,6 @@
   "darwinFloor": 0.3,
   "darwinCeiling": 2.5,
   "darwinMinSamples": 10,
-
   "agentId": "",
   "publicApiKey": "",
   "agentMeridianApiUrl": "https://api.agentmeridian.xyz/api",
@@ -92,13 +85,16 @@
     "entryPreset": "supertrend_break",
     "exitPreset": "supertrend_break",
     "rsiLength": 2,
-    "intervals": ["5_MINUTE"],
+    "intervals": [
+      "5_MINUTE"
+    ],
     "candles": 298,
     "rsiOversold": 30,
     "rsiOverbought": 80,
     "requireAllIntervals": false
   },
   "telegramChatId": "",
+  "telegramLogBehavior": "overwrite", // default (send new messages), delete (delete previous cycle log first), or overwrite (edit previous cycle log)
   "hiveMindUrl": "",
   "hiveMindApiKey": "",
   "hiveMindPullMode": "auto"
