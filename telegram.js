@@ -803,10 +803,15 @@ export async function notifyClose({ pair, pnlUsd, pnlPct, feesUsd = null, minute
     const cfg = fs.existsSync(cfgPath) ? JSON.parse(fs.readFileSync(cfgPath, "utf8")) : {};
     if (cfg.solMode) {
       const pnlVal = Number(pnlSol ?? pnlUsd ?? 0);
-      const feesVal = Number(feesSol ?? feesUsd ?? 0);
-      pnlDisplay = `${pnlVal >= 0 ? "+" : ""}${pnlVal.toFixed(4)} SOL`;
-      feesDisplay = feesVal != null && feesVal > 0 ? `${feesVal.toFixed(4)} SOL` : null;
-      unit = "SOL";
+      pnlDisplay = pnlSol != null ? `${pnlVal >= 0 ? "+" : ""}${pnlVal.toFixed(4)} SOL` : `${pnlVal >= 0 ? "+" : ""}$${Math.abs(pnlVal).toFixed(2)}`;
+      if (feesSol != null) {
+        feesDisplay = Number(feesSol) > 0 ? `${Number(feesSol).toFixed(4)} SOL` : null;
+      } else if (feesUsd != null) {
+        feesDisplay = Number(feesUsd) > 0 ? `$${Number(feesUsd).toFixed(2)}` : null;
+      } else {
+        feesDisplay = null;
+      }
+      unit = pnlSol != null ? "SOL" : "USD";
     } else {
       const pnlVal = Number(pnlUsd ?? 0);
       const feesVal = Number(feesUsd ?? 0);

@@ -1784,6 +1784,7 @@ export async function closePosition({ position_address, reason }) {
         let finalValueUsd = 0;
         let initialUsd = 0;
         let feesUsd = tracked.total_fees_claimed_usd || 0;
+        let feesSol = 0;
         try {
           const closedUrl = `https://dlmm.datapi.meteora.ag/positions/${poolAddress}/pnl?user=${wallet.publicKey.toString()}&status=closed&pageSize=50&page=1`;
           for (let attempt = 0; attempt < 6; attempt++) {
@@ -1798,6 +1799,7 @@ export async function closePosition({ position_address, reason }) {
                 finalValueUsd = parseFloat(posEntry.allTimeWithdrawals?.total?.usd || 0);
                 initialUsd = parseFloat(posEntry.allTimeDeposits?.total?.usd || 0);
                 feesUsd = parseFloat(posEntry.allTimeFees?.total?.usd || 0) || feesUsd;
+                feesSol = parseFloat(posEntry.allTimeFees?.total?.sol || 0) || feesSol;
                 break;
               }
             }
@@ -1805,6 +1807,29 @@ export async function closePosition({ position_address, reason }) {
           }
         } catch (e) {
           log("close_warn", `Relay closed PnL fetch failed: ${e.message}`);
+        }
+
+        // Fallback to pre-close cache snapshot if closed API had no data
+        if (finalValueUsd === 0) {
+          const cachedPos = _positionsCache?.positions?.find(p => p.position === position_address);
+          if (cachedPos) {
+            pnlTrueUsd    = cachedPos.pnl_true_usd ?? (config.management.solMode ? 0 : cachedPos.pnl_usd) ?? 0;
+            pnlUsd        = config.management.solMode ? (cachedPos.pnl_usd ?? 0) : pnlTrueUsd;
+            pnlPct        = cachedPos.pnl_pct   ?? 0;
+            feesUsd       = (cachedPos.collected_fees_true_usd || 0) + (cachedPos.unclaimed_fees_true_usd || 0);
+            feesSol       = config.management.solMode
+              ? (cachedPos.collected_fees_usd || 0) + (cachedPos.unclaimed_fees_usd || 0)
+              : 0;
+            initialUsd    = tracked.initial_value_usd || 0;
+            if (initialUsd > 0) {
+              finalValueUsd = Math.max(0, initialUsd + pnlTrueUsd - feesUsd);
+              if (!config.management.solMode) pnlPct = (pnlTrueUsd / initialUsd) * 100;
+            } else {
+              finalValueUsd = cachedPos.total_value_true_usd ?? cachedPos.total_value_usd ?? 0;
+              initialUsd = Math.max(0, finalValueUsd + feesUsd - pnlTrueUsd);
+            }
+            log("close_warn", `Using cached pnl fallback because closed API has not settled yet`);
+          }
         }
 
         const closeBaseMint = livePosition?.base_mint || pool.lbPair.tokenXMint.toString();
@@ -1827,6 +1852,7 @@ export async function closePosition({ position_address, reason }) {
           organic_score: tracked.organic_score || null,
           amount_sol: tracked.amount_sol,
           fees_earned_usd: feesUsd,
+          fees_earned_sol: feesSol,
           final_value_usd: finalValueUsd,
           initial_value_usd: initialUsd,
           minutes_in_range: minutesHeld - minutesOOR,
@@ -1869,6 +1895,8 @@ export async function closePosition({ position_address, reason }) {
           pnl_pct: pnlPct,
           base_mint: closeBaseMint,
           minutes_held: minutesHeld,
+          fees_earned_usd: feesUsd,
+          fees_earned_sol: feesSol,
           strategy: tracked?.strategy,
           bin_step: tracked?.bin_step,
         };
@@ -2054,6 +2082,7 @@ export async function closePosition({ position_address, reason }) {
       let finalValueUsd = 0;
       let initialUsd = 0;
       let feesUsd = tracked.total_fees_claimed_usd || 0;
+      let feesSol = 0;
       try {
         const closedUrl = `https://dlmm.datapi.meteora.ag/positions/${poolAddress}/pnl?user=${wallet.publicKey.toString()}&status=closed&pageSize=50&page=1`;
         for (let attempt = 0; attempt < 6; attempt++) {
@@ -2068,6 +2097,7 @@ export async function closePosition({ position_address, reason }) {
               const nextFinalValueUsd = parseFloat(posEntry.allTimeWithdrawals?.total?.usd || 0);
               const nextInitialUsd = parseFloat(posEntry.allTimeDeposits?.total?.usd || 0);
               const nextFeesUsd = parseFloat(posEntry.allTimeFees?.total?.usd || 0) || feesUsd;
+              const nextFeesSol = parseFloat(posEntry.allTimeFees?.total?.sol || 0) || feesSol;
 
               if (shouldRejectClosedPnl(nextPnlPct, reason || tracked?.close_reason)) {
                 log("close_warn", `Rejected unsettled closed PnL for ${position_address.slice(0, 8)} on attempt ${attempt + 1}/6: ${nextPnlPct.toFixed(2)}%`);
@@ -2078,6 +2108,7 @@ export async function closePosition({ position_address, reason }) {
                 finalValueUsd = nextFinalValueUsd;
                 initialUsd    = nextInitialUsd;
                 feesUsd       = nextFeesUsd;
+                feesSol       = nextFeesSol;
                 log("close", `Closed PnL from API: pnl=${pnlUsd.toFixed(2)} ${config.management.solMode ? "SOL" : "USD"} (${pnlPct.toFixed(2)}%), withdrawn=${finalValueUsd.toFixed(2)} USD, deposited=${initialUsd.toFixed(2)} USD`);
                 break;
               }
@@ -2098,6 +2129,9 @@ export async function closePosition({ position_address, reason }) {
           pnlUsd        = config.management.solMode ? (cachedPos.pnl_usd ?? 0) : pnlTrueUsd;
           pnlPct        = cachedPos.pnl_pct   ?? 0;
           feesUsd       = (cachedPos.collected_fees_true_usd || 0) + (cachedPos.unclaimed_fees_true_usd || 0);
+          feesSol       = config.management.solMode
+            ? (cachedPos.collected_fees_usd || 0) + (cachedPos.unclaimed_fees_usd || 0)
+            : 0;
           initialUsd    = tracked.initial_value_usd || 0;
           if (initialUsd > 0) {
             // Keep fallback internally consistent using USD-only cached metrics.
@@ -2131,6 +2165,7 @@ export async function closePosition({ position_address, reason }) {
         organic_score: tracked.organic_score || null,
         amount_sol: tracked.amount_sol,
         fees_earned_usd: feesUsd,
+        fees_earned_sol: feesSol,
         final_value_usd: finalValueUsd,
         initial_value_usd: initialUsd,
         minutes_in_range: minutesHeld - minutesOOR,
@@ -2172,6 +2207,7 @@ export async function closePosition({ position_address, reason }) {
         base_mint: closeBaseMint,
         minutes_held: minutesHeld,
         fees_earned_usd: feesUsd,
+        fees_earned_sol: feesSol,
         strategy: tracked?.strategy,
         bin_step: tracked?.bin_step,
       };
