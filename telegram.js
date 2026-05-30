@@ -674,7 +674,7 @@ function formatManagementPositionBlock(block) {
   const first = lines[0] || "";
   
   // Example position line: 🟢 KINS-SOL           +0.2%  yield 12.44% ◎0.05 0h 27m  STAY
-  const match = first.match(/^([🟢🔴])\s+([A-Za-z0-9_\-]+)\s+([\+\-0-9\.]+%?)\s+(?:yield\s+([0-9\.]+%?))?\s*([◎\$][0-9\.]+)\s+([0-9]+h\s+[0-9]+m|[0-9]+m|\?m)(?:\s+OOR([0-9]+m))?\s+(\w+)/i);
+  const match = first.match(/^([🟢🔴])\s+([A-Za-z0-9_\-]+)\s+([\+\-0-9\.]+%?)\s+(?:yield\s+([0-9\.]+%?))?\s*([◎\$][0-9\.]+)\s+([0-9]+h\s+[0-9]+m|[0-9]+m|\?m)(?:\s+OOR([0-9]+m))?\s+(\w+)/iu);
   
   if (!match) {
     return `📍 <b>${first}</b>`;
