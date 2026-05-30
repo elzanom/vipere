@@ -1,50 +1,22 @@
-# Dependencies
-node_modules/
-
-# Environment & secrets
+node_modules
 .env
-.env.*
-!.env.example
-.envrypt
-
-# User config (contains RPC URL, wallet key, API keys)
-user-config.json
-user-config.json.*
-user.config.json.*
-
-# Private Keys & Backups
 *.pem
-backups/
-scratch/
-
-# Runtime state (position tracking, lessons — user-specific)
-state.json
-lessons.json
-smart-wallets.json
-pool-memory.json
-token-blacklist.json
-strategy-library.json
-decision-log.json
-hivemind-cache.json
-signal-weights.json
-
-# Logs
 logs/
-
-# OS
-.DS_Store
-
-# Dev context
-context.md
-CONTEXT.md
+user-config.json
+user-config.json.live
+user-config.json.original
+*.json.15menit*
+*.json.30menit*
+*.json.5menit*
+*.config.json*
+/backups/
+/scratch/
+decision-log.json
 dev-blocklist.json
-docs/
-
-# Discord listener queue
-discord-signals.json
-
-# Playwright MCP browser logs
-.playwright-mcp/
-
-# Claude Code runtime lock
-.claude/scheduled_tasks.lock
+hivemind-cache.json
+lessons.json
+pool-memory.json
+signal-weights.json
+smart-wallets.json
+state.json
+strategy-library.json

@@ -6,6 +6,7 @@ import { tools } from "./tools/definitions.js";
 
 const MANAGER_TOOLS  = new Set(["close_position", "claim_fees", "swap_token", "get_position_pnl", "get_my_positions", "get_wallet_balance"]);
 const SCREENER_TOOLS = new Set(["deploy_position", "get_active_bin", "get_top_candidates", "check_smart_wallets_on_pool", "get_token_holders", "get_token_narrative", "get_token_info", "search_pools", "get_pool_memory", "get_wallet_balance", "get_my_positions"]);
+const WRITE_TOOLS = new Set(["deploy_position", "swap_token", "close_position", "claim_fees"]);
 const GENERAL_INTENT_ONLY_TOOLS = new Set([
   "self_update",
   "update_config",
@@ -241,7 +242,9 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
         log("error", `Bad API response: ${JSON.stringify(response).slice(0, 200)}`);
         throw new Error(`API returned no choices: ${response.error?.message || JSON.stringify(response)}`);
       }
-      const msg = response.choices[0].message;
+      const choice = response.choices[0];
+      const msg = choice.message;
+      const finishReason = choice.finish_reason;
       const invalidToolArgErrors = new Map();
       // Keep tool-call history API-valid, but never execute unrecoverable args.
       if (msg.tool_calls) {
@@ -251,6 +254,10 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
               JSON.parse(tc.function.arguments);
             } catch {
               try {
+                // If response was truncated due to hitting max tokens, do not execute write tools with incomplete arguments
+                if (finishReason === "length" && WRITE_TOOLS.has(tc.function.name)) {
+                  throw new Error(`Response truncated due to token limit (${tc.function.name} arguments incomplete)`);
+                }
                 tc.function.arguments = JSON.stringify(JSON.parse(jsonrepair(tc.function.arguments)));
                 log("warn", `Repaired malformed JSON args for ${tc.function.name}`);
               } catch {
@@ -366,8 +373,9 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
         });
 
         // Lock deploy_position after first attempt regardless of outcome — retrying is never right
+        // But only lock if it wasn't blocked by pre-execution safety checks.
         // For close/swap: only lock on success so genuine failures can be retried
-        if (NO_RETRY_TOOLS.has(functionName)) firedOnce.add(functionName);
+        if (NO_RETRY_TOOLS.has(functionName) && !result.blocked) firedOnce.add(functionName);
         else if (ONCE_PER_SESSION.has(functionName) && result.success === true) firedOnce.add(functionName);
 
         return {

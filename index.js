@@ -475,7 +475,7 @@ RULES:
 
 Execute the required actions. Do NOT re-evaluate CLOSE/CLAIM — rules already applied. Just execute.
 After executing, write a brief one-line result per position.
-      `, config.llm.maxSteps, [], "MANAGER", config.llm.managementModel, 2048, {
+      `, config.llm.maxSteps, [], "MANAGER", config.llm.managementModel, config.llm.maxTokens, {
         onToolStart: async () => {},
         onToolFinish: async () => {},
       });
@@ -898,7 +898,7 @@ STEPS:
 IMPORTANT:
 - Never write "unknown" for OKX. Use real values, omit missing fields, or write exactly "OKX: unavailable".
 - Keep the whole report compact and highly scannable for Telegram.
-      `, config.llm.maxSteps, [], "SCREENER", config.llm.screeningModel, 2048, {
+      `, config.llm.maxSteps, [], "SCREENER", config.llm.screeningModel, config.llm.maxTokens, {
         onToolStart: async ({ name }) => {
           if (name === "deploy_position") deployAttempted = true;
         },
