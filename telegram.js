@@ -799,31 +799,34 @@ export async function notifyClose({ pair, pnlUsd, pnlPct, feesUsd = null, minute
   // ─── Determine display mode (SOL vs USD) ───
   let pnlDisplay, feesDisplay, unit;
   try {
-    const cfgPath = path.join(__dirname, "user-config.json");
-    const cfg = fs.existsSync(cfgPath) ? JSON.parse(fs.readFileSync(cfgPath, "utf8")) : {};
-    if (cfg.solMode) {
-      const pnlVal = Number(pnlSol ?? pnlUsd ?? 0);
-      pnlDisplay = pnlSol != null ? `${pnlVal >= 0 ? "+" : ""}${pnlVal.toFixed(4)} SOL` : `${pnlVal >= 0 ? "+" : ""}$${Math.abs(pnlVal).toFixed(2)}`;
-      if (feesSol != null) {
-        feesDisplay = Number(feesSol) > 0 ? `${Number(feesSol).toFixed(4)} SOL` : null;
-      } else if (feesUsd != null) {
-        feesDisplay = Number(feesUsd) > 0 ? `$${Number(feesUsd).toFixed(2)}` : null;
-      } else {
-        feesDisplay = null;
-      }
-      unit = pnlSol != null ? "SOL" : "USD";
+    if (pnlSol != null) {
+      const pnlSolVal = Number(pnlSol);
+      pnlDisplay = `${pnlSolVal >= 0 ? "+" : "-"}${Math.abs(pnlSolVal).toFixed(4)} SOL`;
+      unit = "SOL";
     } else {
-      const pnlVal = Number(pnlUsd ?? 0);
-      const feesVal = Number(feesUsd ?? 0);
-      pnlDisplay = `${pnlVal >= 0 ? "+" : ""}$${Math.abs(pnlVal).toFixed(2)}`;
-      feesDisplay = feesVal != null && feesVal > 0 ? `$${feesVal.toFixed(2)}` : null;
+      const pnlUsdVal = Number(pnlUsd ?? 0);
+      pnlDisplay = `${pnlUsdVal >= 0 ? "+" : "-"}$${Math.abs(pnlUsdVal).toFixed(2)}`;
       unit = "USD";
     }
-  } catch {
-    const pnlVal = Number(pnlUsd ?? 0);
-    pnlDisplay = `${pnlVal >= 0 ? "+" : ""}$${Math.abs(pnlVal).toFixed(2)}`;
-    feesDisplay = feesUsd != null && Number(feesUsd) > 0 ? `$${Number(feesUsd).toFixed(2)}` : null;
-    unit = "USD";
+    
+    if (feesSol != null) {
+      feesDisplay = Number(feesSol) > 0 ? `${Number(feesSol).toFixed(4)} SOL` : null;
+    } else if (feesUsd != null) {
+      feesDisplay = Number(feesUsd) > 0 ? `$${Number(feesUsd).toFixed(2)}` : null;
+    } else {
+      feesDisplay = null;
+    }
+  } catch (e) {
+    if (pnlSol != null) {
+      const pnlSolVal = Number(pnlSol);
+      pnlDisplay = `${pnlSolVal >= 0 ? "+" : "-"}${Math.abs(pnlSolVal).toFixed(4)} SOL`;
+      unit = "SOL";
+    } else {
+      const pnlUsdVal = Number(pnlUsd ?? 0);
+      pnlDisplay = `${pnlUsdVal >= 0 ? "+" : "-"}$${Math.abs(pnlUsdVal).toFixed(2)}`;
+      unit = "USD";
+    }
+    feesDisplay = feesSol != null && Number(feesSol) > 0 ? `${Number(feesSol).toFixed(4)} SOL` : (feesUsd != null && Number(feesUsd) > 0 ? `$${Number(feesUsd).toFixed(2)}` : null);
   }
 
   // ─── Duration formatting ───

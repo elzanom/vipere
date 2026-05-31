@@ -75,7 +75,7 @@ export async function generateBriefing() {
     topPools = poolEntries
       .filter(p => Array.isArray(p.deploys) && p.deploys.length >= 2)
       .map(p => ({
-        name: p.pool_name || p.deploys[0]?.pool_name || "?",
+        name: p.name || p.pool_name || p.deploys[0]?.pool_name || "?",
         count: p.deploys.length,
         avg_pnl: p.deploys.reduce((s, d) => s + (d.pnl_pct || 0), 0) / p.deploys.length,
       }))
@@ -86,7 +86,7 @@ export async function generateBriefing() {
     blacklistedPools = poolEntries
       .filter(p => Array.isArray(p.deploys) && p.deploys.length >= 2)
       .map(p => ({
-        name: p.pool_name || p.deploys[0]?.pool_name || "?",
+        name: p.name || p.pool_name || p.deploys[0]?.pool_name || "?",
         count: p.deploys.length,
         bad_reasons: p.deploys.filter(d => /oor|out of range|low yield/i.test(d.close_reason || "")).length,
         avg_pnl: p.deploys.reduce((s, d) => s + (d.pnl_pct || 0), 0) / p.deploys.length,
