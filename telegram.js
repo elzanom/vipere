@@ -784,8 +784,8 @@ export async function notifyDeploy({ pair, amountSol, position, tx, priceRange, 
   );
 }
 
-export async function notifyClose({ pair, pnlUsd, pnlPct, feesUsd = null, minutesHeld = null, reason = null, pnlSol = null, feesSol = null, strategy = null, binStep = null, poolAddress = null, position = null }) {
-  if (hasActiveLiveMessage()) return;
+export async function notifyClose({ pair, pnlUsd, pnlPct, feesUsd = null, minutesHeld = null, reason = null, pnlSol = null, feesSol = null, strategy = null, binStep = null, poolAddress = null, position = null, force = false }) {
+  if (hasActiveLiveMessage() && !force) return;
 
   const pct = Number(pnlPct ?? 0);
   const val = Number(pnlSol ?? pnlUsd ?? 0);

@@ -672,6 +672,7 @@ export async function executeTool(name, args) {
           binStep: result.bin_step ?? null,
           poolAddress: result.pool ?? args.pool_address ?? null,
           position: args.position_address ?? null,
+          force: true,
         }).catch(() => { });
         // Note low-yield closes in pool memory so screener avoids redeploying
         if (args.reason && args.reason.toLowerCase().includes("yield")) {

@@ -25,6 +25,7 @@ import {
   editMessageWithButtons,
   answerCallbackQuery,
   notifyOutOfRange,
+  notifyClose,
   isEnabled as telegramEnabled,
   createLiveMessage,
   formatAgentReport,
@@ -1568,20 +1569,20 @@ function formatHelpText() {
     "/status - wallet and positions snapshot",
     "/wallet - balance, deploy amount, HiveMind",
     "/positions - numbered open positions",
-    "/pool <n> - details for one position",
+    "/pool [n] - details for one position",
     "",
     "Actions",
     "/screen - refresh candidate list",
     "/candidates - show cached candidates",
-    "/deploy <n> - deploy cached candidate",
-    "/close <n> - close position by number",
+    "/deploy [n] - deploy cached candidate",
+    "/close [n] - close position by number",
     "/closeall - close every open position",
-    "/set <n> <note> - set position instruction",
+    "/set [n] [note] - set position instruction",
     "",
     "Config",
     "/config - runtime config snapshot",
     "/settings - button settings menu",
-    "/setcfg <key> <value> - update config",
+    "/setcfg [key] [value] - update config",
     "/strategy - list LP strategies",
     "/manage - run management cycle now",
     "",
@@ -1617,8 +1618,8 @@ function formatStrategyList() {
     ...lines,
     "",
     "Commands",
-    "/strategy <id> - show details",
-    "/strategy set <id> - set active",
+    "/strategy [id] - show details",
+    "/strategy set [id] - set active",
   ].join("\n");
 }
 
@@ -1871,7 +1872,7 @@ async function telegramHandler(msg) {
           `   Fees ${cur}${p.unclaimed_fees_usd} | Age ${age} | ${range}`,
         ].join("\n");
       });
-      await sendMessage(`📊 Open Positions\n━━━━━━━━━━━━━━━━\n${total_positions} active\n\n${lines.join("\n\n")}\n\nCommands\n/close <n> close position\n/set <n> <note> set instruction`);
+      await sendMessage(`📊 Open Positions\n━━━━━━━━━━━━━━━━\n${total_positions} active\n\n${lines.join("\n\n")}\n\nCommands\n/close [n] close position\n/set [n] [note] set instruction`);
     } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => {}); }
     return;
   }
@@ -1912,6 +1913,22 @@ async function telegramHandler(msg) {
         const closeTxs = result.close_txs?.length ? result.close_txs : result.txs;
         const claimNote = result.claim_txs?.length ? `\nClaim txs: ${result.claim_txs.join(", ")}` : "";
         await sendMessage(`✅ Closed ${pos.pair}\nPnL: ${config.management.solMode ? "◎" : "$"}${result.pnl_usd ?? "?"} | close txs: ${closeTxs?.join(", ") || "n/a"}${claimNote}`);
+        
+        notifyClose({
+          pair: result.pool_name || pos.pair || pos.position?.slice(0, 8),
+          pnlUsd: result.pnl_usd ?? 0,
+          pnlPct: result.pnl_percent ?? result.pnl_pct ?? 0,
+          pnlSol: result.pnl_sol ?? null,
+          feesUsd: result.fees_earned_usd ?? result.fees_usd ?? null,
+          feesSol: result.fees_earned_sol ?? null,
+          minutesHeld: result.minutes_held ?? null,
+          reason: result.close_reason || "MANUAL_EXIT",
+          strategy: result.strategy ?? null,
+          binStep: result.bin_step ?? null,
+          poolAddress: result.pool ?? pos.pool ?? null,
+          position: pos.position,
+          force: true,
+        }).catch(() => { });
       } else {
         await sendMessage(`❌ Close failed: ${JSON.stringify(result)}`);
       }
@@ -1929,6 +1946,23 @@ async function telegramHandler(msg) {
         try {
           const result = await closePosition({ position_address: pos.position });
           results.push(`${pos.pair}: ${result.success ? "closed" : `failed (${result.error || "unknown"})`}`);
+          if (result.success) {
+            notifyClose({
+              pair: result.pool_name || pos.pair || pos.position?.slice(0, 8),
+              pnlUsd: result.pnl_usd ?? 0,
+              pnlPct: result.pnl_percent ?? result.pnl_pct ?? 0,
+              pnlSol: result.pnl_sol ?? null,
+              feesUsd: result.fees_earned_usd ?? result.fees_usd ?? null,
+              feesSol: result.fees_earned_sol ?? null,
+              minutesHeld: result.minutes_held ?? null,
+              reason: result.close_reason || "MANUAL_EXIT",
+              strategy: result.strategy ?? null,
+              binStep: result.bin_step ?? null,
+              poolAddress: result.pool ?? pos.pool ?? null,
+              position: pos.position,
+              force: true,
+            }).catch(() => { });
+          }
         } catch (error) {
           results.push(`${pos.pair}: failed (${error.stack})`);
         }
