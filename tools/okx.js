@@ -4,7 +4,11 @@
  * Docs: https://web3.okx.com/build/dev-docs/
  */
 import crypto from "crypto";
+import { exec } from "child_process";
+import { promisify } from "util";
 import { config } from "../config.js";
+
+const execAsync = promisify(exec);
 
 const BASE = "https://web3.okx.com";
 const CHAIN_SOLANA = "501";
@@ -66,6 +70,34 @@ const pct = (v) => v != null && v !== "" ? parseFloat(v) : null;
 const int = (v) => v != null && v !== "" ? parseInt(v, 10) : null;
 const serverEnrichmentCache = new Map();
 const SERVER_ENRICHMENT_CACHE_MS = 30_000;
+
+const gmgnCache = new Map();
+const GMGN_CACHE_MS = 30_000;
+
+async function getGmgnData(tokenAddress) {
+  const gmgnApiKey = config.gmgn?.apiKey || process.env.GMGN_API_KEY || "";
+  const useGmgnApi = config.gmgn?.useGmgnApi ?? false;
+  if (!useGmgnApi || !gmgnApiKey) return null;
+
+  const cached = gmgnCache.get(tokenAddress);
+  if (cached && Date.now() - cached.at < GMGN_CACHE_MS) {
+    return cached.promise;
+  }
+
+  const promise = (async () => {
+    try {
+      const cmd = `GMGN_API_KEY="${gmgnApiKey}" npx -y gmgn-cli token info --chain sol --address ${encodeURIComponent(tokenAddress)} --raw`;
+      const { stdout } = await execAsync(cmd);
+      return JSON.parse(stdout);
+    } catch (e) {
+      gmgnCache.delete(tokenAddress);
+      throw e;
+    }
+  })();
+
+  gmgnCache.set(tokenAddress, { at: Date.now(), promise });
+  return promise;
+}
 
 function agentMeridianBaseUrl() {
   return String(config.api?.url || "").replace(/\/+$/, "");
@@ -138,26 +170,46 @@ export async function getRiskFlags(tokenAddress, chainId = CHAIN_SOLANA) {
   const serverPayload = await getServerOkxEnrichmentOrNull(tokenAddress, chainId);
   if (serverPayload?.risk) return serverPayload.risk;
 
-  const ts = Date.now();
-  const path = `/priapi/v1/dx/market/v2/risk/new/check?chainId=${chainId}&tokenContractAddress=${tokenAddress}&t=${ts}`;
-  const data = await okxGet(path);
+  try {
+    const ts = Date.now();
+    const path = `/priapi/v1/dx/market/v2/risk/new/check?chainId=${chainId}&tokenContractAddress=${tokenAddress}&t=${ts}`;
+    const data = await okxGet(path);
 
-  const entries = [
-    ...collectRiskEntries(data?.allAnalysis),
-    ...collectRiskEntries(data?.swapAnalysis),
-    ...collectRiskEntries(data?.contractAnalysis),
-    ...collectRiskEntries(data?.extraAnalysis),
-  ];
+    const entries = [
+      ...collectRiskEntries(data?.allAnalysis),
+      ...collectRiskEntries(data?.swapAnalysis),
+      ...collectRiskEntries(data?.contractAnalysis),
+      ...collectRiskEntries(data?.extraAnalysis),
+    ];
 
-  const hasRisk = (riskKey) =>
-    entries.some((entry) => entry?.riskKey === riskKey && isAffirmative(entry?.newRiskLabel));
+    const hasRisk = (riskKey) =>
+      entries.some((entry) => entry?.riskKey === riskKey && isAffirmative(entry?.newRiskLabel));
 
-  return {
-    is_rugpull: hasRisk("isLiquidityRemoval"),
-    is_wash: hasRisk("isWash"),
-    risk_level: int(data?.riskLevel ?? data?.riskControlLevel),
-    source: "okx-risk-check",
-  };
+    return {
+      is_rugpull: hasRisk("isLiquidityRemoval"),
+      is_wash: hasRisk("isWash"),
+      risk_level: int(data?.riskLevel ?? data?.riskControlLevel),
+      source: "okx-risk-check",
+    };
+  } catch (okxError) {
+    try {
+      const t = await getGmgnData(tokenAddress);
+      if (t) {
+        const top10 = parseFloat(t.stat?.top_10_holder_rate ?? t.dev?.top_10_holder_rate ?? 0);
+        const risk_level = top10 > 0.8 ? 4 : top10 > 0.5 ? 3 : 2;
+        const topRat = parseFloat(t.stat?.top_rat_trader_percentage ?? 0);
+        return {
+          is_rugpull: t.renounced?.mint === false || t.renounced?.freeze === false || false,
+          is_wash: topRat > 0.3,
+          risk_level,
+          source: "gmgn-fallback",
+        };
+      }
+    } catch (gmgnError) {
+      console.warn(`  [okx-fallback] GMGN fallback for risk flags failed: ${gmgnError.message}`);
+    }
+    throw okxError;
+  }
 }
 
 /**
@@ -167,33 +219,81 @@ export async function getAdvancedInfo(tokenAddress, chainIndex = CHAIN_SOLANA) {
   const serverPayload = await getServerOkxEnrichmentOrNull(tokenAddress, chainIndex);
   if (serverPayload?.advanced) return serverPayload.advanced;
 
-  const path = `/api/v6/dex/market/token/advanced-info?chainIndex=${chainIndex}&tokenContractAddress=${tokenAddress}`;
-  const data = await okxGet(path);
-  const d = Array.isArray(data) ? data[0] : data;
-  if (!d) return null;
+  try {
+    const path = `/api/v6/dex/market/token/advanced-info?chainIndex=${chainIndex}&tokenContractAddress=${tokenAddress}`;
+    const data = await okxGet(path);
+    const d = Array.isArray(data) ? data[0] : data;
+    if (!d) return null;
 
-  const tags = d.tokenTags || [];
-  return {
-    risk_level:       int(d.riskControlLevel),
-    bundle_pct:       pct(d.bundleHoldingPercent),
-    sniper_pct:       pct(d.sniperHoldingPercent),
-    suspicious_pct:   pct(d.suspiciousHoldingPercent),
-    dev_holding_pct:  pct(d.devHoldingPercent),
-    top10_pct:        pct(d.top10HoldPercent),
-    lp_burned_pct:    pct(d.lpBurnedPercent),
-    total_fee_sol:    pct(d.totalFee),
-    dev_rug_count:    int(d.devRugPullTokenCount),
-    dev_token_count:  int(d.devCreateTokenCount),
-    creator:          d.creatorAddress || null,
-    tags,
-    is_honeypot:          tags.includes("honeypot"),
-    smart_money_buy:      tags.includes("smartMoneyBuy"),
-    dev_sold_all:         tags.includes("devHoldingStatusSellAll"),
-    dev_buying_more:      tags.includes("devHoldingStatusBuy"),
-    low_liquidity:        tags.includes("lowLiquidity"),
-    dex_boost:            tags.includes("dexBoost"),
-    dex_screener_paid:    tags.includes("dexScreenerPaid") || tags.includes("dsPaid"),
-  };
+    const tags = d.tokenTags || [];
+    return {
+      risk_level:       int(d.riskControlLevel),
+      bundle_pct:       pct(d.bundleHoldingPercent),
+      sniper_pct:       pct(d.sniperHoldingPercent),
+      suspicious_pct:   pct(d.suspiciousHoldingPercent),
+      dev_holding_pct:  pct(d.devHoldingPercent),
+      top10_pct:        pct(d.top10HoldPercent),
+      lp_burned_pct:    pct(d.lpBurnedPercent),
+      total_fee_sol:    pct(d.totalFee),
+      dev_rug_count:    int(d.devRugPullTokenCount),
+      dev_token_count:  int(d.devCreateTokenCount),
+      creator:          d.creatorAddress || null,
+      tags,
+      is_honeypot:          tags.includes("honeypot"),
+      smart_money_buy:      tags.includes("smartMoneyBuy"),
+      dev_sold_all:         tags.includes("devHoldingStatusSellAll"),
+      dev_buying_more:      tags.includes("devHoldingStatusBuy"),
+      low_liquidity:        tags.includes("lowLiquidity"),
+      dex_boost:            tags.includes("dexBoost"),
+      dex_screener_paid:    tags.includes("dexScreenerPaid") || tags.includes("dsPaid"),
+    };
+  } catch (okxError) {
+    try {
+      const t = await getGmgnData(tokenAddress);
+      if (t) {
+        const top10 = parseFloat(t.stat?.top_10_holder_rate ?? t.dev?.top_10_holder_rate ?? 0);
+        const risk_level = top10 > 0.8 ? 4 : top10 > 0.5 ? 3 : 2;
+        const top10_pct = top10 * 100;
+        const bundle_pct = parseFloat(t.stat?.top_bundler_trader_percentage ?? 0) * 100;
+        const sniper_pct = parseFloat(t.stat?.top70_sniper_hold_rate ?? 0) * 100;
+        const dev_holding_pct = parseFloat(t.stat?.creator_hold_rate ?? 0) * 100;
+        const lp_burned_pct = t.locked_ratio ? parseFloat(t.locked_ratio) * 100 : null;
+        const total_fee_sol = t.total_fee ? parseFloat(t.total_fee) : null;
+        
+        const tags = [];
+        if (t.wallet_tags_stat?.smart_wallets > 0) tags.push("smartMoneyBuy");
+        if (t.dev?.creator_token_status === "sell_all") tags.push("devHoldingStatusSellAll");
+        if (t.dev?.creator_token_status === "buy") tags.push("devHoldingStatusBuy");
+        if (t.dev?.dexscr_ad > 0 || t.dev?.dexscr_boost_fee > 0) tags.push("dexScreenerPaid");
+        if (parseFloat(t.pool?.liquidity ?? t.liquidity ?? 0) < 5000) tags.push("lowLiquidity");
+
+        return {
+          risk_level,
+          bundle_pct,
+          sniper_pct,
+          suspicious_pct: null,
+          dev_holding_pct,
+          top10_pct,
+          lp_burned_pct,
+          total_fee_sol,
+          dev_rug_count: 0,
+          dev_token_count: t.dev?.twitter_create_token_count ? parseInt(t.dev.twitter_create_token_count) : null,
+          creator: t.dev?.creator_address || null,
+          tags,
+          is_honeypot: false,
+          smart_money_buy: tags.includes("smartMoneyBuy"),
+          dev_sold_all: tags.includes("devHoldingStatusSellAll"),
+          dev_buying_more: tags.includes("devHoldingStatusBuy"),
+          low_liquidity: tags.includes("lowLiquidity"),
+          dex_boost: false,
+          dex_screener_paid: tags.includes("dexScreenerPaid"),
+        };
+      }
+    } catch (gmgnError) {
+      console.warn(`  [okx-fallback] GMGN fallback for advanced info failed: ${gmgnError.message}`);
+    }
+    throw okxError;
+  }
 }
 
 /**
@@ -204,26 +304,36 @@ export async function getClusterList(tokenAddress, chainIndex = CHAIN_SOLANA, li
   const serverPayload = await getServerOkxEnrichmentOrNull(tokenAddress, chainIndex);
   if (Array.isArray(serverPayload?.clusters)) return serverPayload.clusters.slice(0, limit);
 
-  const path = `/api/v6/dex/market/token/cluster/list?chainIndex=${chainIndex}&tokenContractAddress=${tokenAddress}`;
-  const data = await okxGet(path);
-  // Public endpoint returns data.clusterList (not data[0].clustList)
-  const raw = data?.clusterList ?? (Array.isArray(data) ? data[0]?.clustList ?? [] : []);
-  if (!raw.length) return [];
+  try {
+    const path = `/api/v6/dex/market/token/cluster/list?chainIndex=${chainIndex}&tokenContractAddress=${tokenAddress}`;
+    const data = await okxGet(path);
+    // Public endpoint returns data.clusterList (not data[0].clustList)
+    const raw = data?.clusterList ?? (Array.isArray(data) ? data[0]?.clustList ?? [] : []);
+    if (!raw.length) return [];
 
-  return raw.slice(0, limit).map((c) => {
-    const hasKol = (c.clusterAddressList || []).some((a) => a.isKol);
-    return {
-      holding_pct:   pct(c.holdingPercent),
-      trend:         c.trendType?.trendType || c.trendType || null,
-      avg_hold_days: c.averageHoldingPeriod ? Math.round(parseFloat(c.averageHoldingPeriod) / 86400) : null,
-      pnl_pct:       pct(c.pnlPercent),
-      buy_vol_usd:   pct(c.buyVolume),
-      sell_vol_usd:  pct(c.sellVolume),
-      avg_buy_price: pct(c.averageBuyPriceUsd),
-      has_kol:       hasKol,
-      address_count: (c.clusterAddressList || []).length,
-    };
-  });
+    return raw.slice(0, limit).map((c) => {
+      const hasKol = (c.clusterAddressList || []).some((a) => a.isKol);
+      return {
+        holding_pct:   pct(c.holdingPercent),
+        trend:         c.trendType?.trendType || c.trendType || null,
+        avg_hold_days: c.averageHoldingPeriod ? Math.round(parseFloat(c.averageHoldingPeriod) / 86400) : null,
+        pnl_pct:       pct(c.pnlPercent),
+        buy_vol_usd:   pct(c.buyVolume),
+        sell_vol_usd:  pct(c.sellVolume),
+        avg_buy_price: pct(c.averageBuyPriceUsd),
+        has_kol:       hasKol,
+        address_count: (c.clusterAddressList || []).length,
+      };
+    });
+  } catch (okxError) {
+    try {
+      const t = await getGmgnData(tokenAddress);
+      if (t) return [];
+    } catch (gmgnError) {
+      console.warn(`  [okx-fallback] GMGN fallback for cluster list failed: ${gmgnError.message}`);
+    }
+    throw okxError;
+  }
 }
 
 /**
@@ -256,7 +366,31 @@ export async function getPriceInfo(tokenAddress, chainIndex = CHAIN_SOLANA) {
       liquidity:        pct(d.liquidity),
     };
   } catch (okxError) {
-    // If OKX fails (e.g. region block), fall back to DexScreener API
+    // If OKX fails, first try falling back to GMGN API if available
+    try {
+      const t = await getGmgnData(tokenAddress);
+      if (t) {
+        const price = t.price?.price ? parseFloat(t.price.price) : (t.price ? parseFloat(t.price) : 0);
+        const maxPrice = t.ath_price ? parseFloat(t.ath_price) : 0;
+        return {
+          price,
+          ath:              maxPrice > 0 ? maxPrice : null,
+          atl:              null,
+          price_vs_ath_pct: maxPrice > 0 && price > 0 ? parseFloat(((price / maxPrice) * 100).toFixed(1)) : null,
+          price_change_5m:  t.price?.price_5m ? parseFloat(t.price.price_5m) : null,
+          price_change_1h:  t.price?.price_1h ? parseFloat(t.price.price_1h) : null,
+          volume_5m:        t.price?.volume_5m ? parseFloat(t.price.volume_5m) : null,
+          volume_1h:        t.price?.volume_1h ? parseFloat(t.price.volume_1h) : null,
+          holders:          t.holder_count ? parseInt(t.holder_count) : null,
+          market_cap:       t.pool?.market_cap ? parseFloat(t.pool.market_cap) : (t.market_cap ? parseFloat(t.market_cap) : null),
+          liquidity:        t.pool?.liquidity ? parseFloat(t.pool.liquidity) : (t.liquidity ? parseFloat(t.liquidity) : null),
+        };
+      }
+    } catch (gmgnError) {
+      console.warn(`  [okx-fallback] GMGN fallback for price info failed: ${gmgnError.message}`);
+    }
+
+    // If GMGN is disabled or fails, try DexScreener API
     try {
       const dsRes = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenAddress}`);
       if (dsRes.ok) {

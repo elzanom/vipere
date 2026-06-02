@@ -3,6 +3,7 @@ node_modules
 *.pem
 logs/
 user-config.json
+user-config.json.*
 user-config.json.live
 user-config.json.original
 *.json.15menit*
