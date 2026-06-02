@@ -650,11 +650,6 @@ export async function runScreeningCycle({ silent = false } = {}) {
     }
     log("cron", `Deploy amount: ${deployAmount} SOL (wallet: ${currentBalance.sol} SOL)`);
 
-    // Load active strategy
-    const activeStrategy = getActiveStrategy();
-    const strategyBlock = activeStrategy
-      ? `ACTIVE STRATEGY: ${activeStrategy.name} — LP: ${activeStrategy.lp_strategy} | bins_above: ${activeStrategy.range?.bins_above ?? 0} (FIXED — never change) | deposit: ${activeStrategy.entry?.single_side === "sol" ? "SOL only (amount_y, amount_x=0)" : "dual-sided"} | best for: ${activeStrategy.best_for}`
-      : `No active strategy — use default bid_ask, bins_above: 0, SOL only.`;
 
     // Fetch top candidates, then recon each sequentially with a small delay to avoid 429s
     const topCandidates = await getTopCandidates({ limit: 10 }).catch(() => null);
@@ -821,6 +816,40 @@ export async function runScreeningCycle({ silent = false } = {}) {
 
       return block;
     });
+
+    // Load active strategy (static or dynamic)
+    let activeStrategy = getActiveStrategy();
+    let dynamicReason = "";
+
+    if (activeStrategy && activeStrategy.id === "dynamic") {
+      try {
+        const db = JSON.parse(fs.readFileSync("./strategy-library.json", "utf8"));
+        const validCandidates = passing.filter(c => c.pool?.volatility != null);
+        if (validCandidates.length > 0) {
+          const avgVolatility = validCandidates.reduce((acc, c) => acc + c.pool.volatility, 0) / validCandidates.length;
+          if (avgVolatility > 4) {
+            activeStrategy = db.strategies["bengshark_bidask_volatility"] || db.strategies["lparmy_volatility_hunter"];
+            dynamicReason = `High volatility detected (avg=${avgVolatility.toFixed(2)} > 4.00) → Selected Bengshark Bid-Ask Volatility Play`;
+          } else if (avgVolatility >= 2) {
+            activeStrategy = db.strategies["0xyunss_bidask_sideways"] || db.strategies["lparmy_sawtooth_bidask"];
+            dynamicReason = `Medium volatility detected (2.00 <= avg=${avgVolatility.toFixed(2)} <= 4.00) → Selected Yunus Bid-Ask Play`;
+          } else {
+            activeStrategy = db.strategies["0xyunss_spot_balanced"] || db.strategies["lparmy_spot_range"];
+            dynamicReason = `Low volatility detected (avg=${avgVolatility.toFixed(2)} < 2.00) → Selected Yunus Spot Balanced Play`;
+          }
+        } else {
+          activeStrategy = db.strategies["0xyunss_spot_balanced"] || db.strategies["lparmy_spot_range"];
+          dynamicReason = "No volatility data on candidates → Defaulting to Yunus Spot Balanced Play";
+        }
+        log("strategy", `[DYNAMIC] ${dynamicReason}`);
+      } catch (err) {
+        log("error", `Dynamic strategy selection failed, falling back: ${err.message}`);
+      }
+    }
+
+    const strategyBlock = activeStrategy
+      ? `ACTIVE STRATEGY: ${activeStrategy.name} — LP: ${activeStrategy.lp_strategy} | bins_above: ${activeStrategy.range?.bins_above ?? 0} (FIXED — never change) | deposit: ${activeStrategy.entry?.single_side === "sol" ? "SOL only (amount_y, amount_x=0)" : "dual-sided"} | best for: ${activeStrategy.best_for}${dynamicReason ? `\n(DYNAMIC TUNING: ${dynamicReason})` : ""}`
+      : `No active strategy — use default bid_ask, bins_above: 0, SOL only.`;
 
     const weightsSummary = config.darwin?.enabled ? getWeightsSummary() : null;
 
