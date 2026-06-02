@@ -1019,9 +1019,15 @@ export async function getPositionPnl({ pool_address, position_address }) {
       ? maybeNum(p.pnlSolPctChange)
       : maybeNum(p.pnlPctChange);
     const derivedPnlPct = deriveOpenPnlPct(p, solMode);
+    const pnlSnapshot = resolvePnlSnapshot({
+      reportedPct: reportedPnlPct,
+      derivedPct: derivedPnlPct,
+      reportedValue: solMode ? maybeNum(p.pnlSol) : maybeNum(p.pnlUsd),
+      derivedValue: deriveOpenPnlValue(p, solMode),
+    });
     return {
-      pnl_usd:           roundNum(solMode ? p.pnlSol : p.pnlUsd, 4),
-      pnl_pct:           roundNum(reportedPnlPct ?? derivedPnlPct ?? 0, 2),
+      pnl_usd:           roundNum(pnlSnapshot.value ?? 0, 4),
+      pnl_pct:           roundNum(pnlSnapshot.pct ?? 0, 2),
       current_value_usd: roundNum(currentValue, 4),
       unclaimed_fee_usd: roundNum(unclaimedValue, 4),
       all_time_fees_usd: roundNum(solMode ? p.allTimeFees?.total?.sol : p.allTimeFees?.total?.usd, 4),
@@ -1107,7 +1113,35 @@ function getClosedPnlPct(posEntry, solMode = false) {
   return deposit && deposit > 0 ? (pnl / deposit) * 100 : 0;
 }
 
-function deriveOpenPnlPct(binData, solMode = false) {
+function getClosedPnlEntries(data) {
+  return data?.positions || data?.data || [];
+}
+
+function shouldRejectClosedPnl(pct, closeReasonText) {
+  if (!Number.isFinite(pct)) return false;
+  const reasonText = String(closeReasonText || "").toLowerCase();
+  const stopLossTriggered = reasonText.includes("stop loss");
+  // Meteora sometimes briefly reports absurd closed pnl while the record is settling.
+  // Trust legitimate stop-loss disasters, but reject obviously unsettled outliers otherwise.
+  return !stopLossTriggered && pct <= -90;
+}
+
+function resolvePnlSnapshot({ reportedPct, derivedPct, reportedValue, derivedValue, maxDiffPct = config.management.pnlSanityMaxDiffPct ?? 5 } = {}) {
+  const diff = reportedPct != null && derivedPct != null
+    ? Math.abs(reportedPct - derivedPct)
+    : null;
+  const suspicious = diff != null && diff > maxDiffPct;
+  const useDerived = derivedPct != null && (reportedPct == null || suspicious);
+
+  return {
+    pct: useDerived ? derivedPct : reportedPct,
+    value: useDerived && derivedValue != null ? derivedValue : reportedValue,
+    diff,
+    suspicious,
+  };
+}
+
+function deriveOpenPnlValue(binData, solMode = false) {
   if (!binData) return null;
 
   const deposit = solMode
@@ -1128,8 +1162,30 @@ function deriveOpenPnlPct(binData, solMode = false) {
     ? safeNum(binData.allTimeFees?.total?.sol)
     : safeNum(binData.allTimeFees?.total?.usd);
 
-  const pnl = balances + unclaimedFees + withdrawals + fees - deposit;
+  return balances + unclaimedFees + withdrawals + fees - deposit;
+}
+
+function deriveOpenPnlPct(binData, solMode = false) {
+  if (!binData) return null;
+
+  const deposit = solMode
+    ? safeNum(binData.allTimeDeposits?.total?.sol)
+    : safeNum(binData.allTimeDeposits?.total?.usd);
+  if (deposit <= 0) return null;
+
+  const pnl = deriveOpenPnlValue(binData, solMode);
+  if (pnl == null) return null;
   return (pnl / deposit) * 100;
+}
+
+function deriveLpAgentPnlValue(lpData, solMode = false) {
+  if (!lpData) return null;
+  const deposit = solMode ? safeNum(lpData.inputNative) : safeNum(lpData.inputValue);
+  if (deposit <= 0) return null;
+
+  const currentValue = solMode ? safeNum(lpData.valueNative) : safeNum(lpData.value);
+  const unclaimedFees = solMode ? safeNum(lpData.unCollectedFeeNative) : safeNum(lpData.unCollectedFee);
+  return currentValue + unclaimedFees - deposit;
 }
 
 function deriveLpAgentPnlPct(lpData, solMode = false) {
@@ -1137,11 +1193,20 @@ function deriveLpAgentPnlPct(lpData, solMode = false) {
   const deposit = solMode ? safeNum(lpData.inputNative) : safeNum(lpData.inputValue);
   if (deposit <= 0) return null;
 
-  const currentValue = solMode ? safeNum(lpData.valueNative) : safeNum(lpData.value);
-  const unclaimedFees = solMode ? safeNum(lpData.unCollectedFeeNative) : safeNum(lpData.unCollectedFee);
-  const pnl = currentValue + unclaimedFees - deposit;
+  const pnl = deriveLpAgentPnlValue(lpData, solMode);
+  if (pnl == null) return null;
   return (pnl / deposit) * 100;
 }
+
+export const __pnlAccounting = {
+  deriveOpenPnlPct,
+  deriveOpenPnlValue,
+  deriveLpAgentPnlPct,
+  deriveLpAgentPnlValue,
+  getClosedPnlEntries,
+  resolvePnlSnapshot,
+  shouldRejectClosedPnl,
+};
 
 async function fetchRawOpenPositionsFromMeridian({ walletAddress, agentId }) {
   const search = new URLSearchParams({
@@ -1337,19 +1402,33 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
           ? Math.floor((Date.now() - new Date(tracked.deployed_at).getTime()) / 60000)
           : null;
         const reportedPnlPct = lpData
-          ? parseFloat(config.management.solMode ? (lpData.pnl?.percentNative || 0) : (lpData.pnl?.percent || 0))
+          ? maybeNum(config.management.solMode ? lpData.pnl?.percentNative : lpData.pnl?.percent)
           : binData
-            ? parseFloat(config.management.solMode ? (binData.pnlSolPctChange || 0) : (binData.pnlPctChange || 0))
+            ? maybeNum(config.management.solMode ? binData.pnlSolPctChange : binData.pnlPctChange)
             : null;
         const derivedPnlPct = lpData
           ? deriveLpAgentPnlPct(lpData, config.management.solMode)
           : binData
             ? deriveOpenPnlPct(binData, config.management.solMode)
             : null;
-        const pnlPctDiff = reportedPnlPct != null && derivedPnlPct != null
-          ? Math.abs(reportedPnlPct - derivedPnlPct)
-          : null;
-        const pnlPctSuspicious = pnlPctDiff != null && pnlPctDiff > (config.management.pnlSanityMaxDiffPct ?? 5);
+        const reportedPnlValue = lpData
+          ? (config.management.solMode ? maybeNum(lpData.pnl?.valueNative) : maybeNum(lpData.pnl?.value))
+          : binData
+            ? (config.management.solMode ? maybeNum(binData.pnlSol) : maybeNum(binData.pnlUsd))
+            : null;
+        const derivedPnlValue = lpData
+          ? deriveLpAgentPnlValue(lpData, config.management.solMode)
+          : binData
+            ? deriveOpenPnlValue(binData, config.management.solMode)
+            : null;
+        const pnlSnapshot = resolvePnlSnapshot({
+          reportedPct: reportedPnlPct,
+          derivedPct: derivedPnlPct,
+          reportedValue: reportedPnlValue,
+          derivedValue: derivedPnlValue,
+        });
+        const pnlPctDiff = pnlSnapshot.diff;
+        const pnlPctSuspicious = pnlSnapshot.suspicious;
         if (pnlPctSuspicious) {
           log("positions_warn", `Suspicious pnl_pct for ${positionAddress.slice(0, 8)}: reported=${reportedPnlPct.toFixed(2)} derived=${derivedPnlPct.toFixed(2)} diff=${pnlPctDiff.toFixed(2)}`);
         }
@@ -1409,22 +1488,16 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
             : binData
             ? Math.round(parseFloat(binData.allTimeFees?.total?.usd || 0) * 10000) / 10000
             : null,
-          pnl_usd:            lpData
-            ? Math.round((
-                config.management.solMode
-                  ? safeNum(lpData.pnl?.valueNative)
-                  : safeNum(lpData.pnl?.value)
-              ) * 10000) / 10000
-            : binData
-            ? Math.round(parseFloat(config.management.solMode ? (binData.pnlSol || 0) : (binData.pnlUsd || 0)) * 10000) / 10000
+          pnl_usd:            pnlSnapshot.value != null
+            ? Math.round(pnlSnapshot.value * 10000) / 10000
             : null,
           pnl_true_usd:       lpData
             ? Math.round(safeNum(lpData.pnl?.value) * 10000) / 10000
             : binData
             ? Math.round(parseFloat(binData.pnlUsd || 0) * 10000) / 10000
             : null,
-          pnl_pct:            (lpData || binData)
-            ? Math.round(reportedPnlPct * 100) / 100
+          pnl_pct:            pnlSnapshot.pct != null
+            ? Math.round(pnlSnapshot.pct * 100) / 100
             : null,
           pnl_pct_derived:    derivedPnlPct != null ? Math.round(derivedPnlPct * 100) / 100 : null,
           pnl_pct_diff:       pnlPctDiff != null ? Math.round(pnlPctDiff * 100) / 100 : null,
@@ -1791,16 +1864,23 @@ export async function closePosition({ position_address, reason }) {
             const res = await fetch(closedUrl);
             if (res.ok) {
               const data = await res.json();
-              const posEntry = (data.positions || []).find((entry) => entry.positionAddress === position_address);
+              const posEntry = getClosedPnlEntries(data).find((entry) => entry.positionAddress === position_address);
               if (posEntry) {
-                pnlTrueUsd = safeNum(posEntry.pnlUsd);
-                pnlUsd = config.management.solMode ? getClosedPnlValue(posEntry, true) : pnlTrueUsd;
-                pnlPct = getClosedPnlPct(posEntry, config.management.solMode);
-                finalValueUsd = parseFloat(posEntry.allTimeWithdrawals?.total?.usd || 0);
-                initialUsd = parseFloat(posEntry.allTimeDeposits?.total?.usd || 0);
-                feesUsd = parseFloat(posEntry.allTimeFees?.total?.usd || 0) || feesUsd;
-                feesSol = parseFloat(posEntry.allTimeFees?.total?.sol || 0) || feesSol;
-                break;
+                const nextPnlTrueUsd = safeNum(posEntry.pnlUsd);
+                const nextPnlValue = config.management.solMode ? getClosedPnlValue(posEntry, true) : nextPnlTrueUsd;
+                const nextPnlPct = getClosedPnlPct(posEntry, config.management.solMode);
+                if (shouldRejectClosedPnl(nextPnlPct, reason || tracked?.close_reason)) {
+                  log("close_warn", `Rejected unsettled relay closed PnL for ${position_address.slice(0, 8)} on attempt ${attempt + 1}/6: ${nextPnlPct.toFixed(2)}%`);
+                } else {
+                  pnlTrueUsd = nextPnlTrueUsd;
+                  pnlUsd = nextPnlValue;
+                  pnlPct = nextPnlPct;
+                  finalValueUsd = parseFloat(posEntry.allTimeWithdrawals?.total?.usd || 0);
+                  initialUsd = parseFloat(posEntry.allTimeDeposits?.total?.usd || 0);
+                  feesUsd = parseFloat(posEntry.allTimeFees?.total?.usd || 0) || feesUsd;
+                  feesSol = parseFloat(posEntry.allTimeFees?.total?.sol || 0) || feesSol;
+                  break;
+                }
               }
             }
             if (attempt < 5) await new Promise((resolve) => setTimeout(resolve, 5000));
@@ -2066,15 +2146,6 @@ export async function closePosition({ position_address, reason }) {
         minutesOOR = Math.floor((Date.now() - new Date(tracked.out_of_range_since).getTime()) / 60000);
       }
 
-      const shouldRejectClosedPnl = (pct, closeReasonText) => {
-        if (!Number.isFinite(pct)) return false;
-        const reasonText = String(closeReasonText || "").toLowerCase();
-        const stopLossTriggered = reasonText.includes("stop loss");
-        // Meteora sometimes briefly reports absurd closed pnl while the record is settling.
-        // Trust legitimate stop-loss disasters, but reject obviously unsettled outliers otherwise.
-        return !stopLossTriggered && pct <= -90;
-      };
-
       // Fetch closed PnL from API — authoritative source after withdrawal settles
       let pnlUsd = 0;
       let pnlTrueUsd = 0;
@@ -2089,7 +2160,7 @@ export async function closePosition({ position_address, reason }) {
           const res = await fetch(closedUrl);
           if (res.ok) {
             const data = await res.json();
-            const posEntry = (data.positions || []).find(p => p.positionAddress === position_address);
+            const posEntry = getClosedPnlEntries(data).find(p => p.positionAddress === position_address);
             if (posEntry) {
               const nextPnlUsd = safeNum(posEntry.pnlUsd);
               const nextPnlValue = config.management.solMode ? getClosedPnlValue(posEntry, true) : nextPnlUsd;
