@@ -13,7 +13,6 @@ const POOL_DISCOVERY_BASE = "https://pool-discovery-api.datapi.meteora.ag";
 const MIN_VOLATILITY_TIMEFRAME = "30m";
 const TIMEFRAME_MINUTES = {
   "5m": 5,
-  "15m": 15,
   "30m": 30,
   "1h": 60,
   "2h": 120,
@@ -711,76 +710,25 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     }
   }
 
-  // Enrich with OKX data — advanced info (risk/bundle/sniper) + ATH price (no API key required)
+  // Dev blocklist check — filter pools whose creator is on the blocklist
   if (eligible.length > 0) {
-    const { getAdvancedInfo, getPriceInfo, getClusterList, getRiskFlags } = await import("./okx.js");
-    const okxResults = await Promise.allSettled(
+    const rugcheckResults = await Promise.allSettled(
       eligible.map(async (p) => {
-        if (!p.base?.mint) return { adv: null, price: null, clusters: [], risk: null, rugcheck: null };
-        const [adv, price, clusters, risk, rugcheckRes] = await Promise.allSettled([
-          getAdvancedInfo(p.base.mint),
-          getPriceInfo(p.base.mint),
-          getClusterList(p.base.mint),
-          getRiskFlags(p.base.mint),
-          fetch(`https://api.rugcheck.xyz/v1/tokens/${p.base.mint}/report/summary`).then(r => r.ok ? r.json() : null)
-        ]);
-
-        const mintShort = p.base.mint.slice(0, 8);
-        if (adv.status !== "fulfilled")      log("okx", `advanced-info unavailable for ${p.name} (${mintShort})`);
-        if (price.status !== "fulfilled")    log("okx", `price-info unavailable for ${p.name} (${mintShort})`);
-        if (clusters.status !== "fulfilled") log("okx", `cluster-list unavailable for ${p.name} (${mintShort})`);
-        if (risk.status !== "fulfilled")     log("okx", `risk-check unavailable for ${p.name} (${mintShort})`);
-
-        return {
-          adv: adv.status === "fulfilled" ? adv.value : null,
-          price: price.status === "fulfilled" ? price.value : null,
-          clusters: clusters.status === "fulfilled" ? clusters.value : [],
-          risk: risk.status === "fulfilled" ? risk.value : null,
-          rugcheck: rugcheckRes.status === "fulfilled" ? rugcheckRes.value : null,
-        };
+        if (!p.base?.mint) return null;
+        return fetch(`https://api.rugcheck.xyz/v1/tokens/${p.base.mint}/report/summary`)
+          .then(r => r.ok ? r.json() : null)
+          .catch(() => null);
       })
     );
     for (let i = 0; i < eligible.length; i++) {
-      const r = okxResults[i];
-      if (r.status !== "fulfilled") continue;
-      const { adv, price, clusters, risk, rugcheck } = r.value;
-      if (adv) {
-        eligible[i].risk_level      = adv.risk_level;
-        eligible[i].bundle_pct      = adv.bundle_pct;
-        eligible[i].sniper_pct      = adv.sniper_pct;
-        eligible[i].suspicious_pct  = adv.suspicious_pct;
-        eligible[i].smart_money_buy = adv.smart_money_buy;
-        eligible[i].dev_sold_all    = adv.dev_sold_all;
-        eligible[i].dex_boost       = adv.dex_boost;
-        eligible[i].dex_screener_paid = adv.dex_screener_paid;
-        if (adv.creator && !eligible[i].dev) eligible[i].dev = adv.creator;
-      }
-      if (risk) {
-        eligible[i].is_rugpull = risk.is_rugpull;
-        eligible[i].is_wash    = risk.is_wash;
-      }
-      if (price) {
-        eligible[i].price_vs_ath_pct = price.price_vs_ath_pct;
-        eligible[i].ath              = price.ath;
-      }
-      if (rugcheck) {
-        eligible[i].rugcheck_score = rugcheck.score;
-        eligible[i].is_rugcheck_danger = rugcheck.risks?.some(r => r.level === 'danger');
-      }
-      if (clusters?.length) {
-        // Surface KOL presence and top cluster trend for LLM
-        eligible[i].kol_in_clusters      = clusters.some((c) => c.has_kol);
-        eligible[i].top_cluster_trend    = clusters[0]?.trend ?? null;      // buy|sell|neutral
-        eligible[i].top_cluster_hold_pct = clusters[0]?.holding_pct ?? null;
-      }
+      const r = rugcheckResults[i];
+      if (r.status !== "fulfilled" || !r.value) continue;
+      const rugcheck = r.value;
+      eligible[i].rugcheck_score = rugcheck.score;
+      eligible[i].is_rugcheck_danger = rugcheck.risks?.some(r => r.level === 'danger');
     }
-    // Wash trading & Rugpull hard filter
+    // Rugpull hard filter
     eligible.splice(0, eligible.length, ...eligible.filter((p) => {
-      if (p.is_wash) {
-        log("screening", `Risk filter: dropped ${p.name} — wash trading flagged`);
-        pushFilteredReason(filteredOut, p, "wash trading flagged");
-        return false;
-      }
       if (p.is_rugcheck_danger || p.rugcheck_score > 5000) {
         log("screening", `Risk filter: dropped ${p.name} — RugCheck danger (score: ${p.rugcheck_score})`);
         pushFilteredReason(filteredOut, p, "rugcheck danger");
@@ -873,9 +821,11 @@ export async function getTopCandidates({ limit = 10 } = {}) {
   if (eligible.length > 0) {
     const { getPoolStats } = await import("../lessons.js").catch(() => ({ getPoolStats: () => null }));
 
-    // Fetch 5m snapshots for momentum (parallel, ignore failures)
+    const momentumTimeframe = getPoolDiscoveryTimeframe(config.screening.timeframe || "30m");
+
+    // Fetch snapshots using the configured screening timeframe (parallel, ignore failures).
     const momentumResults = await Promise.allSettled(
-      eligible.map((p) => fetchPoolDiscoveryDetail({ poolAddress: p.pool, timeframe: "5m" }))
+      eligible.map((p) => fetchPoolDiscoveryDetail({ poolAddress: p.pool, timeframe: momentumTimeframe }))
     );
 
     for (let i = 0; i < eligible.length; i++) {
@@ -892,26 +842,26 @@ export async function getTopCandidates({ limit = 10 } = {}) {
         log("screening", `Pool history enriched: ${p.name} — ${hist.count} trades, ${hist.win_rate_pct}% win rate, avg PnL ${hist.avg_pnl_pct}%`);
       }
 
-      // Momentum: compare 5m volume vs pool's own 30m volume
-      const snap5m = momentumResults[i]?.status === "fulfilled" ? momentumResults[i].value : null;
+      // Momentum: compare configured-timeframe snapshot vs the candidate's screening metrics.
+      const snap = momentumResults[i]?.status === "fulfilled" ? momentumResults[i].value : null;
       let momentumScore = 0;
-      if (snap5m) {
-        const vol5m = Number(snap5m.volume ?? 0);
-        const vol30m = Number(p.volume ?? p.volume_window ?? 0);
-        const fee5m = Number(snap5m.fee_active_tvl_ratio ?? 0);
-        const fee30m = Number(p.fee_active_tvl_ratio ?? 0);
-        if (vol5m > 0 && vol30m > 0) {
-          // Annualize 5m to 30m-equivalent: vol5m * 6 vs vol30m
-          if (vol5m * 6 > vol30m * 1.2) momentumScore++;
-          if (vol5m * 6 < vol30m * 0.5) momentumScore--;
+      if (snap) {
+        const snapVolume = Number(snap.volume ?? 0);
+        const baselineVolume = Number(p.volume ?? p.volume_window ?? 0);
+        const snapFeeTvl = Number(snap.fee_active_tvl_ratio ?? 0);
+        const baselineFeeTvl = Number(p.fee_active_tvl_ratio ?? 0);
+        if (snapVolume > 0 && baselineVolume > 0) {
+          if (snapVolume > baselineVolume * 1.2) momentumScore++;
+          if (snapVolume < baselineVolume * 0.5) momentumScore--;
         }
-        if (fee5m > 0 && fee30m > 0) {
-          if (fee5m > fee30m * 1.2) momentumScore++;
-          if (fee5m < fee30m * 0.5) momentumScore--;
+        if (snapFeeTvl > 0 && baselineFeeTvl > 0) {
+          if (snapFeeTvl > baselineFeeTvl * 1.2) momentumScore++;
+          if (snapFeeTvl < baselineFeeTvl * 0.5) momentumScore--;
         }
         p.momentum_score = momentumScore;
-        p.vol_5m = vol5m;
-        p.fee_tvl_5m = fee5m;
+        p.momentum_timeframe = momentumTimeframe;
+        p[`vol_${momentumTimeframe}`] = snapVolume;
+        p[`fee_tvl_${momentumTimeframe}`] = snapFeeTvl;
       }
     }
 
