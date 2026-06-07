@@ -175,6 +175,7 @@ File config asli sengaja dibiarkan sebagai JSON murni tanpa komentar.
 | Key | Keterangan |
 | --- | --- |
 | `telegramChatId` | Chat ID Telegram tujuan notifikasi/control. |
+| `telegramThreadId` | Topic ID (Message Thread ID) Telegram untuk grup dengan topik/forum. |
 | `telegramLogBehavior` | Perilaku log Telegram, misalnya `delete` untuk merapikan pesan lama. |
 
 ## Internal Metadata
