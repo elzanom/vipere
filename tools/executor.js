@@ -32,12 +32,11 @@ import { getTokenInfo, getTokenHolders, getTokenNarrative } from "./token.js";
 import { config, reloadScreeningThresholds, MIN_SAFE_BINS_BELOW } from "../config.js";
 import { getRecentDecisions } from "../decision-log.js";
 import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 import { execSync, spawn } from "child_process";
+import { REPO_ROOT, repoPath } from "../repo-root.js";
+import { normalizeTimeframe, scaleScreeningToTimeframe } from "../screening-scales.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const USER_CONFIG_PATH = path.join(__dirname, "../user-config.json");
+const USER_CONFIG_PATH = repoPath("user-config.json");
 const POOL_DISCOVERY_BASE = "https://pool-discovery-api.datapi.meteora.ag";
 import { log, logAction } from "../logger.js";
 import { notifyDeploy, notifyClose, notifySwap } from "../telegram.js";
@@ -206,7 +205,15 @@ async function validateDeployPoolThresholds(args) {
     };
   }
 
-  return { pass: true };
+  const baseMint = detail?.token_x?.address || detail?.base_token_address || null;
+  const entryMarketData = {
+    entry_mcap: numberOrNull(detail?.token_x?.market_cap ?? detail?.base_token_market_cap),
+    entry_tvl: tvl,
+    entry_volume: numberOrNull(detail?.volume),
+    entry_holders: numberOrNull(detail?.base_token_holders ?? detail?.token_x?.holders),
+  };
+
+  return { pass: true, entryMarketData };
 }
 
 export async function checkDeployPreflight({ pool_address }) {
@@ -324,7 +331,7 @@ const toolMap = {
   },
   self_update: async () => {
     try {
-      const result = execSync("git pull", { cwd: process.cwd(), encoding: "utf8" }).trim();
+      const result = execSync("git pull", { cwd: REPO_ROOT, encoding: "utf8" }).trim();
       if (result.includes("Already up to date")) {
         return { success: true, updated: false, message: "Already up to date — no restart needed." };
       }
@@ -334,7 +341,7 @@ const toolMap = {
           const child = spawn(process.execPath, process.argv.slice(1), {
             detached: true,
             stdio: "inherit",
-            cwd: process.cwd(),
+            cwd: REPO_ROOT,
           });
           child.unref();
         }
@@ -412,14 +419,8 @@ const toolMap = {
       discordSignalMode: ["screening", "discordSignalMode"],
       avoidPvpSymbols: ["screening", "avoidPvpSymbols"],
       blockPvpSymbols: ["screening", "blockPvpSymbols"],
-      maxBundlePct: ["screening", "maxBundlePct"],
       maxBotHoldersPct: ["screening", "maxBotHoldersPct"],
       maxTop10Pct: ["screening", "maxTop10Pct"],
-      allowedLaunchpads: ["screening", "allowedLaunchpads"],
-      blockedLaunchpads: ["screening", "blockedLaunchpads"],
-      minTokenAgeHours: ["screening", "minTokenAgeHours"],
-      maxTokenAgeHours: ["screening", "maxTokenAgeHours"],
-      athFilterPct: ["screening", "athFilterPct"],
       minFeePerTvl24h: ["management", "minFeePerTvl24h"],
       // management
       minClaimAmount: ["management", "minClaimAmount"],
@@ -521,6 +522,17 @@ const toolMap = {
       }
     }
 
+    // Auto-scale fee/volume when timeframe changes (unless user set them explicitly in same call).
+    if (applied.timeframe != null && applied.minFeeActiveTvlRatio == null && applied.minVolume == null) {
+      const tf = normalizeTimeframe(applied.timeframe);
+      applied.timeframe = tf;
+      const scaled = scaleScreeningToTimeframe(tf);
+      applied.minFeeActiveTvlRatio = scaled.minFeeActiveTvlRatio;
+      applied.minVolume = scaled.minVolume;
+      applied._timeframeScaled = true;
+      log("config", `timeframe ${tf} → auto-scaled minFeeActiveTvlRatio=${scaled.minFeeActiveTvlRatio}, minVolume=${scaled.minVolume}`);
+    }
+
     if (Object.keys(applied).length === 0) {
       log("config", `update_config failed — unknown keys: ${JSON.stringify(unknown)}, raw changes: ${JSON.stringify(changes)}`);
       return { success: false, unknown, reason };
@@ -537,6 +549,7 @@ const toolMap = {
 
     // Apply to live config immediately after the persisted config is known-good.
     for (const [key, val] of Object.entries(applied)) {
+      if (key.startsWith("_")) continue;
       const [section, field] = CONFIG_MAP[key];
       const before = config[section][field];
       config[section][field] = val;
@@ -560,6 +573,7 @@ const toolMap = {
     }
 
     for (const [key, val] of Object.entries(applied)) {
+      if (key.startsWith("_")) continue;
       const persistPath = CONFIG_MAP[key]?.[2];
       if (Array.isArray(persistPath) && persistPath.length > 0) {
         let target = userConfig;
@@ -586,7 +600,7 @@ const toolMap = {
 
     // Skip repeated volatility-driven interval changes; they are operational tuning, not reusable lessons.
     const lessonsKeys = Object.keys(applied).filter(
-      k => k !== "managementIntervalMin" && k !== "screeningIntervalMin"
+      k => !k.startsWith("_") && k !== "managementIntervalMin" && k !== "screeningIntervalMin"
     );
     if (lessonsKeys.length > 0) {
       const summary = lessonsKeys.map(k => `${k}=${applied[k]}`).join(", ");
@@ -738,6 +752,7 @@ async function runSafetyChecks(name, args) {
     case "deploy_position": {
       const poolThresholds = await validateDeployPoolThresholds(args);
       if (!poolThresholds.pass) return poolThresholds;
+      if (poolThresholds.entryMarketData) Object.assign(args, poolThresholds.entryMarketData);
 
       // Reject pools with bin_step out of configured range
       const minStep = config.screening.minBinStep;
