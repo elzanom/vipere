@@ -1,10 +1,12 @@
 import dns from "dns";
 dns.setDefaultResultOrder("ipv4first");
+import fs from "fs";
 import "./envcrypt.js";
 import cron from "node-cron";
 import readline from "readline";
 import path from "path";
 import { fileURLToPath } from "url";
+import { REPO_ROOT, repoPath } from "./repo-root.js";
 import { agentLoop } from "./agent.js";
 import { log } from "./logger.js";
 import { getMyPositions, closePosition, getActiveBin } from "./tools/dlmm.js";
@@ -48,12 +50,16 @@ global.macroPanic = false;
 global.marketRegime = "SIDEWAYS"; // BULLISH | BEARISH | SIDEWAYS
 
 const entrypointPath = process.env.pm_exec_path || process.argv[1];
-const isMain = entrypointPath
-  ? path.resolve(entrypointPath) === fileURLToPath(import.meta.url)
-  : false;
+const indexPath = fileURLToPath(import.meta.url);
+const isMain = process.env.pm_id != null
+  || (entrypointPath ? path.resolve(entrypointPath) === indexPath : false);
 
 if (isMain) {
   log("startup", "DLMM LP Agent starting...");
+  log("startup", `Repo: ${REPO_ROOT} | cwd: ${process.cwd()}${process.env.pm_id ? ` | PM2 id: ${process.env.pm_id}` : ""}`);
+  if (path.resolve(process.cwd()) !== path.resolve(REPO_ROOT)) {
+    log("startup_warn", `process.cwd() differs from repo root — use "npm run pm2:start" (not "pm2 start index.js" from another directory)`);
+  }
   log("startup", `Mode: ${process.env.DRY_RUN === "true" ? "DRY RUN" : "LIVE"}`);
   log("startup", `Model: ${process.env.LLM_MODEL || "hermes-3-405b"}`);
   ensureAgentId();
@@ -295,7 +301,7 @@ export async function runManagementCycle({ silent = false } = {}) {
   log("cron", "Starting management cycle");
   let mgmtReport = null;
   let positions = [];
-  const screeningCooldownMs = 5 * 60 * 1000;
+  const screeningCooldownMs = Math.max(1, Number(config.schedule.screeningIntervalMin ?? 30)) * 60 * 1000;
   const isDryRun = process.env.DRY_RUN === "true";
 
   try {
@@ -303,9 +309,14 @@ export async function runManagementCycle({ silent = false } = {}) {
     positions = livePositions?.positions || [];
 
     if (positions.length === 0) {
-      log("cron", "No open positions — triggering screening cycle");
-      mgmtReport = "No open positions. Triggering screening cycle.";
-      runScreeningCycle().catch((e) => log("cron_error", `Triggered screening failed: ${e.message}`));
+      if (Date.now() - _screeningLastTriggered > screeningCooldownMs) {
+        log("cron", "No open positions — triggering screening cycle");
+        mgmtReport = "No open positions. Triggering screening cycle.";
+        runScreeningCycle().catch((e) => log("cron_error", `Triggered screening failed: ${e.message}`));
+      } else {
+        log("cron", `No open positions — screening waits for ${config.schedule.screeningIntervalMin}m interval`);
+        mgmtReport = `No open positions. Screening waits for ${config.schedule.screeningIntervalMin}m interval.`;
+      }
       return mgmtReport;
     }
 
@@ -521,7 +532,7 @@ After executing, write a brief one-line result per position.
     _managementBusy = false;
     if (!silent && telegramEnabled()) {
       if (mgmtReport) {
-        sendManagedActionMessage(`🔄 Management Cycle\n\n${formatAgentReport(stripThink(mgmtReport))}`, undefined, "management").catch(() => { });
+        sendManagedActionMessage(`🔄 Management Cycle\n\n${formatAgentReport(stripThink(mgmtReport))}`, null, "management").catch(() => { });
       }
       for (const p of positions) {
         if (!p.in_range && p.minutes_out_of_range >= config.management.outOfRangeWaitMinutes) {
@@ -761,25 +772,6 @@ export async function runScreeningCycle({ silent = false } = {}) {
       const netBuyers = ti?.stats_1h?.net_buyers;
       const activeBin = activeBinResults[i]?.status === "fulfilled" ? activeBinResults[i].value?.binId : null;
 
-      // OKX signals
-      const okxParts = [
-        pool.risk_level     != null ? `risk=${pool.risk_level}`               : null,
-        pool.bundle_pct     != null ? `bundle=${pool.bundle_pct}%`            : null,
-        pool.sniper_pct     != null ? `sniper=${pool.sniper_pct}%`            : null,
-        pool.suspicious_pct != null ? `suspicious=${pool.suspicious_pct}%`    : null,
-        pool.new_wallet_pct != null ? `new_wallets=${pool.new_wallet_pct}%`   : null,
-        pool.is_rugpull != null ? `rugpull=${pool.is_rugpull ? "YES" : "NO"}` : null,
-        pool.is_wash != null ? `wash=${pool.is_wash ? "YES" : "NO"}` : null,
-      ].filter(Boolean).join(", ");
-      const okxUnavailable = !okxParts && pool.price_vs_ath_pct == null;
-
-      const okxTags = [
-        pool.smart_money_buy    ? "smart_money_buy"    : null,
-        pool.kol_in_clusters    ? "kol_in_clusters"    : null,
-        pool.dex_boost          ? "dex_boost"          : null,
-        pool.dex_screener_paid  ? "dex_screener_paid"  : null,
-        pool.dev_sold_all       ? "dev_sold_all(bullish)" : null,
-      ].filter(Boolean).join(", ");
       const pvpLine = pool.is_pvp
         ? `  pvp: HIGH — rival ${pool.pvp_rival_name || pool.pvp_symbol} (${pool.pvp_rival_mint?.slice(0, 8)}...) has pool ${pool.pvp_rival_pool?.slice(0, 8)}..., tvl=$${pool.pvp_rival_tvl}, holders=${pool.pvp_rival_holders}, fees=${pool.pvp_rival_fees}SOL`
         : null;
@@ -789,9 +781,6 @@ export async function runScreeningCycle({ silent = false } = {}) {
         `  metrics: bin_step=${pool.bin_step}, fee_pct=${pool.fee_pct}%, fee_tvl=${pool.fee_active_tvl_ratio}, vol=$${pool.volume_window}, tvl=$${pool.tvl ?? pool.active_tvl}, volatility_${pool.volatility_timeframe || "30m"}=${pool.volatility}, mcap=$${pool.mcap}, organic=${pool.organic_score}${pool.token_age_hours != null ? `, age=${pool.token_age_hours}h` : ""}`,
         `  audit: top10=${top10Pct}%, bots=${botPct}%, fees=${feesSol}SOL${launchpad ? `, launchpad=${launchpad}` : ""}`,
         pvpLine,
-        okxParts ? `  okx: ${okxParts}` : okxUnavailable ? `  okx: unavailable` : null,
-        okxTags  ? `  tags: ${okxTags}` : null,
-        pool.price_vs_ath_pct != null ? `  ath: price_vs_ath=${pool.price_vs_ath_pct}%${pool.top_cluster_trend ? `, top_cluster=${pool.top_cluster_trend}` : ""}` : null,
         `  smart_wallets: ${sw?.in_pool?.length ?? 0} present${sw?.in_pool?.length ? ` → CONFIDENCE BOOST (${sw.in_pool.map(w => w.name).join(", ")})` : ""}`,
         activeBin != null ? `  active_bin: ${activeBin}` : null,
         priceChange != null ? `  1h: price${priceChange >= 0 ? "+" : ""}${priceChange}%, net_buyers=${netBuyers ?? "?"}` : null,
@@ -823,7 +812,7 @@ export async function runScreeningCycle({ silent = false } = {}) {
 
     if (activeStrategy && activeStrategy.id === "dynamic") {
       try {
-        const db = JSON.parse(fs.readFileSync("./strategy-library.json", "utf8"));
+        const db = JSON.parse(fs.readFileSync(repoPath("strategy-library.json"), "utf8"));
         const validCandidates = passing.filter(c => c.pool?.volatility != null);
         if (validCandidates.length > 0) {
           const avgVolatility = validCandidates.reduce((acc, c) => acc + c.pool.volatility, 0) / validCandidates.length;
@@ -847,9 +836,9 @@ export async function runScreeningCycle({ silent = false } = {}) {
       }
     }
 
-    const strategyBlock = activeStrategy
-      ? `ACTIVE STRATEGY: ${activeStrategy.name} — LP: ${activeStrategy.lp_strategy} | bins_above: ${activeStrategy.range?.bins_above ?? 0} (FIXED — never change) | deposit: ${activeStrategy.entry?.single_side === "sol" ? "SOL only (amount_y, amount_x=0)" : "dual-sided"} | best for: ${activeStrategy.best_for}${dynamicReason ? `\n(DYNAMIC TUNING: ${dynamicReason})` : ""}`
-      : `No active strategy — use default bid_ask, bins_above: 0, SOL only.`;
+    const deployStrategy = config.strategy.strategy;
+    const strategyBlock = `DEPLOY STRATEGY: ${deployStrategy} (from config) | bins_above: 0 (FIXED — never change) | deposit: SOL only (amount_y, amount_x=0)`
+      + (activeStrategy ? `\nSTRATEGY CONTEXT: ${activeStrategy.name} — LP: ${activeStrategy.lp_strategy} | bins_above: ${activeStrategy.range?.bins_above ?? 0} (FIXED — never change) | best for: ${activeStrategy.best_for}${dynamicReason ? ` (DYNAMIC TUNING: ${dynamicReason})` : ""}` : "");
 
     const weightsSummary = config.darwin?.enabled ? getWeightsSummary() : null;
 
@@ -926,7 +915,6 @@ STEPS:
    REJECTED
    <short flat list of top candidate names and why they were skipped>
 IMPORTANT:
-- Never write "unknown" for OKX. Use real values, omit missing fields, or write exactly "OKX: unavailable".
 - Keep the whole report compact and highly scannable for Telegram.
       `, config.llm.maxSteps, [], "SCREENER", config.llm.screeningModel, config.llm.maxTokens, {
         onToolStart: async ({ name }) => {
@@ -978,8 +966,8 @@ IMPORTANT:
     _screeningBusy = false;
     if (!silent && telegramEnabled()) {
       if (screenReport) {
-        if (liveMessage) await liveMessage.finalize(stripThink(screenReport), { actions: true }).catch(() => {});
-        else sendManagedActionMessage(`🔍 Screening Cycle\n\n${formatAgentReport(stripThink(screenReport))}`, undefined, "screening").catch(() => { });
+        if (liveMessage) await liveMessage.finalize(stripThink(screenReport), { actions: false }).catch(() => {});
+        else sendManagedActionMessage(`🔍 Screening Cycle\n\n${formatAgentReport(stripThink(screenReport))}`, null, "screening").catch(() => { });
       }
     }
   }
@@ -2171,8 +2159,6 @@ function getLoneCandidateSkipReason({ pool, sw, n, ti } = {}) {
   const globalFeesSol = Number(tokenInfo.global_fees_sol ?? pool.gmgn_total_fee_sol);
   const top10Pct = Number(tokenInfo.audit?.top_holders_pct ?? pool.gmgn_token_info_top10_pct ?? pool.gmgn_top10_holder_pct);
   const botPct = Number(tokenInfo.audit?.bot_holders_pct ?? pool.gmgn_bot_degen_pct);
-  if (pool.is_wash) return "wash trading was flagged";
-  if (pool.is_rugpull && smartWalletCount === 0) return "rugpull risk was flagged and no smart wallets offset it";
   if (pool.is_pvp && smartWalletCount === 0) return "PVP symbol conflict and no smart-wallet confirmation";
   if (Number.isFinite(globalFeesSol) && globalFeesSol < config.screening.minTokenFeesSol) {
     return `token fees ${globalFeesSol} SOL below minimum ${config.screening.minTokenFeesSol} SOL`;
@@ -2469,7 +2455,7 @@ Focus on: hold duration, entry/exit timing, what win rates look like, whether sc
           return;
         }
         const fs = await import("fs");
-        const lessonsData = JSON.parse(fs.default.readFileSync("./lessons.json", "utf8"));
+        const lessonsData = JSON.parse(fs.default.readFileSync(repoPath("lessons.json"), "utf8"));
         const result = evolveThresholds(lessonsData.performance, config);
         if (!result || Object.keys(result.changes).length === 0) {
           console.log("\nNo threshold changes needed — current settings already match performance data.\n");
