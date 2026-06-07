@@ -2,9 +2,10 @@ import fs from "fs";
 import { log } from "./logger.js";
 import { getPerformanceSummary, getBestEntryHours } from "./lessons.js";
 import { config } from "./config.js";
+import { repoPath } from "./repo-root.js";
 
-const STATE_FILE = "./state.json";
-const LESSONS_FILE = "./lessons.json";
+const STATE_FILE = repoPath("state.json");
+const LESSONS_FILE = repoPath("lessons.json");
 
 export async function generateBriefing() {
   const state = loadJson(STATE_FILE) || { positions: {}, recentEvents: [] };
@@ -69,7 +70,7 @@ export async function generateBriefing() {
   let topPools = [];
   let blacklistedPools = [];
   try {
-    const poolMemory = loadJson("./pool-memory.json") || {};
+    const poolMemory = loadJson(repoPath("pool-memory.json")) || {};
     const poolEntries = Object.values(poolMemory);
     // Top pools: at least 2 trades, positive avg PnL
     topPools = poolEntries
