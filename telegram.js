@@ -1,12 +1,10 @@
 import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 import { log } from "./logger.js";
+import { repoPath } from "./repo-root.js";
 import { generatePnLImage } from "./pnl-card.js";
 import { getStrategy, getActiveStrategy } from "./strategy-library.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const USER_CONFIG_PATH = path.join(__dirname, "user-config.json");
+const USER_CONFIG_PATH = repoPath("user-config.json");
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || null;
 const BASE  = TOKEN ? `https://api.telegram.org/bot${TOKEN}` : null;
@@ -17,7 +15,8 @@ const ALLOWED_USER_IDS = new Set(
     .filter(Boolean)
 );
 
-let chatId   = process.env.TELEGRAM_CHAT_ID || null;
+let chatId = null;
+let threadId = process.env.TELEGRAM_THREAD_ID || null;
 let _offset  = 0;
 let _polling = false;
 let _liveMessageDepth = 0;
@@ -27,11 +26,37 @@ let _warnedMissingAllowedUsers = false;
 let telegramLogBehavior = "default";
 
 // ─── config and chatId persistence ──────────────────────────────────────────
+function nonEmptyChatId(value) {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  return trimmed || null;
+}
+
+function resolveChatId() {
+  const fromEnv = nonEmptyChatId(process.env.TELEGRAM_CHAT_ID);
+  let fromConfig = null;
+  try {
+    if (fs.existsSync(USER_CONFIG_PATH)) {
+      const cfg = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
+      fromConfig = nonEmptyChatId(cfg.telegramChatId);
+    }
+  } catch { /* ignore */ }
+  // user-config wins when set; otherwise fall back to .env
+  const resolved = fromConfig || fromEnv || null;
+  return resolved != null ? String(resolved) : null;
+}
+
+function loadChatId() {
+  chatId = resolveChatId();
+}
+
+// ─── config and chatId persistence ──────────────────────────────────────────
 function loadConfig() {
   try {
     if (fs.existsSync(USER_CONFIG_PATH)) {
       const cfg = JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"));
-      if (cfg.telegramChatId) chatId = cfg.telegramChatId;
+      chatId = nonEmptyChatId(cfg.telegramChatId) || chatId;
+      if (cfg.telegramThreadId !== undefined) threadId = cfg.telegramThreadId;
       if (cfg.telegramLogBehavior) telegramLogBehavior = cfg.telegramLogBehavior;
     }
   } catch (error) {
@@ -56,7 +81,7 @@ loadConfig();
 // ─── lastMessageId persistence ──────────────────────────────────
 function loadLastMessageId(slot = "default") {
   try {
-    const statePath = path.join(__dirname, "state.json");
+    const statePath = repoPath("state.json");
     if (fs.existsSync(statePath)) {
       const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
       if (slot !== "default") {
@@ -72,7 +97,7 @@ function loadLastMessageId(slot = "default") {
 
 function saveLastMessageId(id, slot = "default") {
   try {
-    const statePath = path.join(__dirname, "state.json");
+    const statePath = repoPath("state.json");
     let state = {};
     if (fs.existsSync(statePath)) {
       state = JSON.parse(fs.readFileSync(statePath, "utf8"));
@@ -103,7 +128,9 @@ function isAuthorizedIncomingMessage(msg) {
     return false;
   }
 
-  if (incomingChatId !== chatId) return false;
+  if (incomingChatId !== String(chatId)) return false;
+
+  if (threadId && String(msg.message_thread_id || "") !== String(threadId)) return false;
 
   if (chatType !== "private" && ALLOWED_USER_IDS.size === 0) {
     if (!_warnedMissingAllowedUsers) {
@@ -128,14 +155,22 @@ export function isEnabled() {
 async function postTelegram(method, body) {
   if (!TOKEN || !chatId) return null;
   try {
+    const payload = { chat_id: chatId, ...body };
+    if (threadId && (method === "sendMessage" || method === "sendChatAction")) {
+      payload.message_thread_id = Number(threadId);
+    }
     const res = await fetch(`${BASE}/${method}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, ...body }),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) {
       const err = await res.text();
-      log("telegram_error", `${method} ${res.status}: ${err.slice(0, 200)}`);
+      if (res.status === 401) {
+        log("telegram_error", `${method} 401 Unauthorized — check TELEGRAM_BOT_TOKEN in .env (invalid, revoked, or encrypted without .envrypt key)`);
+      } else {
+        log("telegram_error", `${method} ${res.status}: ${err.slice(0, 200)}`);
+      }
       if (err.includes("message is not modified")) {
         return { ok: true, notModified: true };
       }
@@ -158,7 +193,11 @@ async function postTelegramRaw(method, body) {
     });
     if (!res.ok) {
       const err = await res.text();
-      log("telegram_error", `${method} ${res.status}: ${err.slice(0, 200)}`);
+      if (res.status === 401) {
+        log("telegram_error", `${method} 401 Unauthorized — check TELEGRAM_BOT_TOKEN in .env (invalid, revoked, or encrypted without .envrypt key)`);
+      } else {
+        log("telegram_error", `${method} ${res.status}: ${err.slice(0, 200)}`);
+      }
       return null;
     }
     return await res.json();
@@ -207,6 +246,8 @@ export async function sendActionMessage(text, inlineKeyboard = defaultActionKeyb
 export async function sendManagedActionMessage(text, inlineKeyboard = defaultActionKeyboard(), slot = "default") {
   loadConfig();
 
+  const hasButtons = Array.isArray(inlineKeyboard) && inlineKeyboard.length > 0;
+
   if (telegramLogBehavior === "delete") {
     const prevId = loadLastMessageId(slot);
     if (prevId) {
@@ -217,12 +258,16 @@ export async function sendManagedActionMessage(text, inlineKeyboard = defaultAct
   if (telegramLogBehavior === "overwrite") {
     const prevId = loadLastMessageId(slot);
     if (prevId) {
-      const edited = await editMessageWithButtons(text, prevId, inlineKeyboard);
+      const edited = hasButtons
+        ? await editMessageWithButtons(text, prevId, inlineKeyboard)
+        : await editMessage(text, prevId);
       if (edited) return edited;
     }
   }
 
-  const sent = await sendMessageWithButtons(text, inlineKeyboard);
+  const sent = hasButtons
+    ? await sendMessageWithButtons(text, inlineKeyboard)
+    : await sendMessage(text);
   const messageId = sent?.result?.message_id ?? null;
   if (messageId && (telegramLogBehavior === "overwrite" || telegramLogBehavior === "delete")) {
     saveLastMessageId(messageId, slot);
@@ -240,6 +285,9 @@ export async function sendPhoto(buffer, caption = "") {
   try {
     const formData = new FormData();
     formData.append("chat_id", chatId);
+    if (threadId) {
+      formData.append("message_thread_id", String(threadId));
+    }
     if (caption) {
       formData.append("caption", caption.slice(0, 1024));
       formData.append("parse_mode", "HTML");
@@ -722,6 +770,7 @@ async function poll(onMessage) {
             chat: callback.message.chat,
             from: callback.from,
             text: callback.data,
+            message_thread_id: callback.message.message_thread_id,
           };
           if (!isAuthorizedIncomingMessage(callbackMsg)) continue;
           await onMessage({
@@ -749,6 +798,10 @@ async function poll(onMessage) {
 
 export function startPolling(onMessage) {
   if (!TOKEN) return;
+  loadChatId();
+  if (!chatId) {
+    log("telegram_warn", "TELEGRAM_CHAT_ID not set in .env or user-config.telegramChatId — outbound notifications and inbound control disabled until configured.");
+  }
   _polling = true;
   setupBotCommands().catch((error) => log("telegram_warn", `setMyCommands failed: ${error.message}`));
   poll(onMessage); // fire-and-forget
