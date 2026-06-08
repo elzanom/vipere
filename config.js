@@ -42,6 +42,10 @@ if (u.dryRun !== undefined) process.env.DRY_RUN ||= String(u.dryRun);
 if (u.publicApiKey) process.env.PUBLIC_API_KEY ||= u.publicApiKey;
 if (u.agentMeridianApiUrl) process.env.AGENT_MERIDIAN_API_URL ||= u.agentMeridianApiUrl;
 if (u.gmgnApiKey) process.env.GMGN_API_KEY ||= u.gmgnApiKey;
+if (u.okxApiKey)    process.env.OKX_API_KEY    ||= u.okxApiKey;
+if (u.okxSecretKey)   process.env.OKX_SECRET_KEY   ||= u.okxSecretKey;
+if (u.okxPassphrase)  process.env.OKX_PASSPHRASE  ||= u.okxPassphrase;
+if (u.okxProjectId)   process.env.OKX_PROJECT_ID   ||= u.okxProjectId;
 if (u.telegramChatId) process.env.TELEGRAM_CHAT_ID ||= String(u.telegramChatId);
 
 const indicatorUserConfig = u.chartIndicators ?? {};

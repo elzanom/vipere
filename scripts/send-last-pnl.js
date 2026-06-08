@@ -1,12 +1,10 @@
 import "../envcrypt.js";
 import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 import { notifyClose, isEnabled } from "../telegram.js";
+import { repoPath } from "../repo-root.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const STATE_PATH = path.join(__dirname, "../state.json");
-const DECISION_LOG_PATH = path.join(__dirname, "../decision-log.json");
+const STATE_PATH = repoPath("state.json");
+const DECISION_LOG_PATH = repoPath("decision-log.json");
 
 async function main() {
   console.log("Checking if Telegram is enabled...");

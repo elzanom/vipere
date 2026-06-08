@@ -11,6 +11,7 @@ import { parseArgs } from "util";
 import os from "os";
 import fs from "fs";
 import path from "path";
+import { repoPath } from "./repo-root.js";
 
 // ─── DRY_RUN must be set before any tool imports ─────────────────
 if (process.argv.includes("--dry-run")) process.env.DRY_RUN = "true";
@@ -564,7 +565,7 @@ switch (subcommand) {
     const { config } = await import("./config.js");
     const { evolveThresholds } = await import("./lessons.js");
     const fs2 = await import("fs");
-    const lessonsFile = "./lessons.json";
+    const lessonsFile = repoPath("lessons.json");
     let perfData = [];
     if (fs2.existsSync(lessonsFile)) {
       try { perfData = JSON.parse(fs2.readFileSync(lessonsFile, "utf8")).performance || []; } catch { /* no data */ }
@@ -606,7 +607,7 @@ switch (subcommand) {
 
   // ── discord-signals ──────────────────────────────────────────────
   case "discord-signals": {
-    const sigFile = path.join(process.cwd(), "discord-signals.json");
+    const sigFile = repoPath("discord-signals.json");
     if (!fs.existsSync(sigFile)) {
       out({ count: 0, pending: 0, signals: [], message: "No discord-signals.json found. Is the listener running?" });
       break;
