@@ -138,7 +138,7 @@
     "custom_ratio_spot": {
       "id": "custom_ratio_spot",
       "name": "Custom Ratio Spot",
-      "author": "meridian",
+      "author": "gods-grace",
       "lp_strategy": "spot",
       "token_criteria": {
         "notes": "Any token. Ratio expresses directional bias."
@@ -163,7 +163,7 @@
     "single_sided_reseed": {
       "id": "single_sided_reseed",
       "name": "Single-Sided Bid-Ask + Re-seed",
-      "author": "meridian",
+      "author": "gods-grace",
       "lp_strategy": "bid_ask",
       "token_criteria": {
         "notes": "Volatile tokens with strong narrative. Must have active volume."
@@ -188,7 +188,7 @@
     "fee_compounding": {
       "id": "fee_compounding",
       "name": "Fee Compounding",
-      "author": "meridian",
+      "author": "gods-grace",
       "lp_strategy": "any",
       "token_criteria": {
         "notes": "Stable volume pools with consistent fee generation."
@@ -211,7 +211,7 @@
     "multi_layer": {
       "id": "multi_layer",
       "name": "Multi-Layer",
-      "author": "meridian",
+      "author": "gods-grace",
       "lp_strategy": "mixed",
       "token_criteria": {
         "notes": "High volume pools. Layer multiple shapes into ONE position via addLiquidityByStrategy to sculpt a composite distribution."
@@ -239,7 +239,7 @@
     "partial_harvest": {
       "id": "partial_harvest",
       "name": "Partial Harvest",
-      "author": "meridian",
+      "author": "gods-grace",
       "lp_strategy": "any",
       "token_criteria": {
         "notes": "High fee pools where taking profit incrementally is preferred."
@@ -263,7 +263,7 @@
     "single_sided_sol_bidask": {
       "id": "single_sided_sol_bidask",
       "name": "Single-Sided SOL Bid-Ask",
-      "author": "meridian",
+      "author": "gods-grace",
       "lp_strategy": "bid_ask",
       "token_criteria": {
         "notes": "Volatile SOL pairs with strong organic quality, active volume, and acceptable holder concentration."
@@ -289,7 +289,7 @@
     "sol_spot_balanced_entry": {
       "id": "sol_spot_balanced_entry",
       "name": "SOL Spot Balanced Entry",
-      "author": "meridian",
+      "author": "gods-grace",
       "lp_strategy": "spot",
       "token_criteria": {
         "notes": "Choppy or sideways SOL pairs with active volume and clean holder quality."
@@ -315,7 +315,7 @@
     "conservative_wide_bidask": {
       "id": "conservative_wide_bidask",
       "name": "Conservative Wide Bid-Ask",
-      "author": "meridian",
+      "author": "gods-grace",
       "lp_strategy": "bid_ask",
       "token_criteria": {
         "notes": "Higher quality pools only: stronger TVL, volume, organic score, and lower bot/top-holder concentration."

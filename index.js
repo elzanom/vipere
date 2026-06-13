@@ -1602,7 +1602,7 @@ async function applySettingsMenuCallback(msg) {
 
 function formatHelpText() {
   return [
-    "🤖 Meridian Commands",
+    "🤖 Gods Grace Commands",
     "━━━━━━━━━━━━━━━━",
     "",
     "Status",

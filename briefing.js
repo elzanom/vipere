@@ -189,7 +189,7 @@ export async function generateBriefing() {
     customLabel2: 'OPEN POSITIONS',
     customValue2: `${openPositions.length}`,
     dateStr: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase(),
-    agentName: "VIPERA"
+    agentName: "GODS GRACE"
   };
 
   return { text, stats };

@@ -1,11 +1,11 @@
-# Vipera 🐍
+# Gods Grace
 
 **An autonomous, production-hardened Meteora DLMM liquidity management agent for Solana, powered by LLMs.**
 
 **Developed & Maintained by:** [elzanom](https://github.com/elzanom)  
 **Based on:** Upstream [Meridian](https://github.com/yunus-0x/meridian)
 
-Vipera is a highly customized, production-hardened fork of the Meridian DLMM LP agent. It has been extensively optimized by **elzanom** to feature strict anti-rugpull screening (RugCheck API + Low Organic Filter), real-time state index lag recovery, PM2 lifecycle hardening, dynamic Kelly criterion sizing, and an advanced graphical daily PnL briefing via Telegram.
+Gods Grace is a highly customized, production-hardened fork of the Meridian DLMM LP agent. It has been extensively optimized by **elzanom** to feature strict anti-rugpull screening (RugCheck API + Low Organic Filter), real-time state index lag recovery, PM2 lifecycle hardening, dynamic Kelly criterion sizing, and an advanced graphical daily PnL briefing via Telegram.
 
 ---
 
@@ -22,7 +22,7 @@ Vipera is a highly customized, production-hardened fork of the Meridian DLMM LP 
 
 ## How it works
 
-Meridian runs a **ReAct agent loop** — each cycle the LLM reasons over live data, calls tools, and acts. Two specialized agents run on independent cron schedules:
+Gods Grace runs a **ReAct agent loop** — each cycle the LLM reasons over live data, calls tools, and acts. Two specialized agents run on independent cron schedules:
 
 | Agent | Default interval | Role |
 |---|---|---|
@@ -31,7 +31,7 @@ Meridian runs a **ReAct agent loop** — each cycle the LLM reasons over live da
 
 ### Agent harness
 
-Meridian's agent harness is the runtime wrapper around every autonomous cycle. It gives both **main** and **experimental** agents the same control loop: load live state, inject relevant memory, expose only role-appropriate tools, execute tool calls, and return a readable cycle report.
+Gods Grace's agent harness is the runtime wrapper around every autonomous cycle. It gives both **main** and **experimental** agents the same control loop: load live state, inject relevant memory, expose only role-appropriate tools, execute tool calls, and return a readable cycle report.
 
 The harness also keeps a structured decision log in `decision-log.json` for deployments, closes, skips, and no-deploy outcomes. Each entry records the actor, pool or position, summary, reason, key risks, metrics, and rejected alternatives. Recent decisions are injected back into the system prompt and are available through `get_recent_decisions`, so the agent can answer "why did you deploy?", "why did you close?", or "why did you skip?" without guessing after the fact.
 
@@ -62,8 +62,8 @@ Agents are powered via **OpenRouter** and can be swapped for any compatible mode
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/yunus-0x/meridian
-cd meridian
+git clone https://github.com/elzanom/vipere gods-grace
+cd gods-grace
 npm install
 ```
 
@@ -99,7 +99,7 @@ printf "replace-with-a-long-local-key\n" > .envrypt
 npm run env:encrypt
 ```
 
-Meridian loads envrypt-style encrypted values automatically. Keep `.env.raw` and `.envrypt` local; both are gitignored.
+Gods Grace loads envrypt-style encrypted values automatically. Keep `.env.raw` and `.envrypt` local; both are gitignored.
 
 Copy config and edit as needed:
 
@@ -116,7 +116,7 @@ npm run dev    # dry run — no on-chain transactions
 npm start      # live mode
 ```
 
-On startup Meridian fetches your wallet balance, open positions, and top pool candidates, then begins autonomous cycles immediately.
+On startup Gods Grace fetches your wallet balance, open positions, and top pool candidates, then begins autonomous cycles immediately.
 
 ### Run with PM2
 
@@ -135,6 +135,14 @@ npm run pm2:restart  # re-reads .env on each restart
 npm run pm2:logs
 ```
 
+If you are migrating from the old `vipera` PM2 process name, delete it once before starting Gods Grace:
+
+```bash
+pm2 delete vipera
+npm run pm2:start
+pm2 save
+```
+
 To update an existing PM2 install:
 
 ```bash
@@ -147,7 +155,7 @@ pm2 save
 If a previous PM2 run was started incorrectly, reset it once:
 
 ```bash
-pm2 delete vipera
+pm2 delete gods-grace
 npm run pm2:start
 pm2 save
 ```
@@ -168,7 +176,7 @@ On startup, logs show `Repo: ... | cwd: ... | PM2 id: ...`. **Repo and cwd must 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Crash loop after `git pull` | `npm install` skipped | `npm install && npm run pm2:restart` |
-| Missing wallet / API keys | Started with `pm2 start index.js` from wrong directory | `pm2 delete vipera && npm run pm2:start` |
+| Missing wallet / API keys | Started with `pm2 start index.js` from wrong directory | `pm2 delete gods-grace && npm run pm2:start` |
 | `.env` changes ignored | Old PM2 env snapshot | `npm run pm2:restart` (`.env` now overrides stale PM2 env) |
 | Telegram `401 Unauthorized` | Invalid `TELEGRAM_BOT_TOKEN` (not chat ID) | Fix token in `.env`; if encrypted, ensure `.envrypt` exists |
 | Telegram commands ignored | Missing/wrong `TELEGRAM_CHAT_ID` | Set in `.env` (or `telegramChatId` in `user-config.json`) |
@@ -211,10 +219,10 @@ REPL commands:
 
 ### Claude Code terminal (recommended)
 
-Install [Claude Code](https://claude.ai/code) and use it from inside the meridian directory. Claude Code has built-in agents and slash commands that use the `meridian` CLI under the hood.
+Install [Claude Code](https://claude.ai/code) and use it from inside the project directory. Claude Code has built-in agents and slash commands that use the `gods-grace` CLI under the hood.
 
 ```bash
-cd meridian
+cd gods-grace
 claude
 ```
 
@@ -259,11 +267,11 @@ Run screening or management on a timer inside Claude Code:
 
 ### CLI (direct tool invocation)
 
-The `meridian` CLI gives you direct access to every tool with JSON output — useful for scripting, debugging, or piping into other tools.
+The `gods-grace` CLI gives you direct access to every tool with JSON output — useful for scripting, debugging, or piping into other tools. The legacy `meridian` alias is still available.
 
 ```bash
 npm install -g .   # install globally (once)
-meridian <command> [flags]
+gods-grace <command> [flags]
 ```
 
 Or run without installing:
@@ -275,83 +283,83 @@ node cli.js <command> [flags]
 **Positions & PnL**
 
 ```bash
-meridian positions
-meridian pnl <position_address>
-meridian wallet-positions --wallet <addr>
+gods-grace positions
+gods-grace pnl <position_address>
+gods-grace wallet-positions --wallet <addr>
 ```
 
 **Screening**
 
 ```bash
-meridian candidates --limit 5
-meridian pool-detail --pool <addr> [--timeframe 5m]
-meridian active-bin --pool <addr>
-meridian search-pools --query <name_or_symbol>
-meridian study --pool <addr> [--limit 4]
+gods-grace candidates --limit 5
+gods-grace pool-detail --pool <addr> [--timeframe 5m]
+gods-grace active-bin --pool <addr>
+gods-grace search-pools --query <name_or_symbol>
+gods-grace study --pool <addr> [--limit 4]
 ```
 
 **Token research**
 
 ```bash
-meridian token-info --query <mint_or_symbol>
-meridian token-holders --mint <addr> [--limit 20]
-meridian token-narrative --mint <addr>
+gods-grace token-info --query <mint_or_symbol>
+gods-grace token-holders --mint <addr> [--limit 20]
+gods-grace token-narrative --mint <addr>
 ```
 
 **Deploy & manage**
 
 ```bash
-meridian deploy --pool <addr> --amount <sol> [--bins-below 69] [--bins-above 0] [--strategy bid_ask|spot|curve] [--dry-run]
-meridian claim --position <addr>
-meridian close --position <addr> [--skip-swap] [--dry-run]
-meridian swap --from <mint> --to <mint> --amount <n> [--dry-run]
-meridian add-liquidity --position <addr> --pool <addr> [--amount-x <n>] [--amount-y <n>] [--strategy spot]
-meridian withdraw-liquidity --position <addr> --pool <addr> [--bps 10000]
+gods-grace deploy --pool <addr> --amount <sol> [--bins-below 69] [--bins-above 0] [--strategy bid_ask|spot|curve] [--dry-run]
+gods-grace claim --position <addr>
+gods-grace close --position <addr> [--skip-swap] [--dry-run]
+gods-grace swap --from <mint> --to <mint> --amount <n> [--dry-run]
+gods-grace add-liquidity --position <addr> --pool <addr> [--amount-x <n>] [--amount-y <n>] [--strategy spot]
+gods-grace withdraw-liquidity --position <addr> --pool <addr> [--bps 10000]
 ```
 
 **Agent cycles**
 
 ```bash
-meridian screen [--dry-run] [--silent]   # one AI screening cycle
-meridian manage [--dry-run] [--silent]   # one AI management cycle
-meridian start [--dry-run]               # start autonomous agent with cron jobs
+gods-grace screen [--dry-run] [--silent]   # one AI screening cycle
+gods-grace manage [--dry-run] [--silent]   # one AI management cycle
+gods-grace start [--dry-run]               # start autonomous agent with cron jobs
 ```
 
 **Config**
 
 ```bash
-meridian config get
-meridian config set <key> <value>
+gods-grace config get
+gods-grace config set <key> <value>
 ```
 
 **Learning & memory**
 
 ```bash
-meridian lessons
-meridian lessons add "your lesson text"
-meridian performance [--limit 200]
-meridian evolve
-meridian pool-memory --pool <addr>
+gods-grace lessons
+gods-grace lessons add "your lesson text"
+gods-grace performance [--limit 200]
+gods-grace evolve
+gods-grace pool-memory --pool <addr>
 ```
 
 **Blacklist**
 
 ```bash
-meridian blacklist list
-meridian blacklist add --mint <addr> --reason "reason"
+gods-grace blacklist list
+gods-grace blacklist add --mint <addr> --reason "reason"
 ```
 
 **Discord signals**
 
 ```bash
-meridian discord-signals
-meridian discord-signals clear
+gods-grace discord-signals
+gods-grace discord-signals clear
 ```
 
 **Balance**
 
 ```bash
-meridian balance
+gods-grace balance
 ```
 
 **Flags**
@@ -433,13 +441,13 @@ TELEGRAM_CHAT_ID=<your chat id>          # .env alone is enough; also saved to u
 TELEGRAM_ALLOWED_USER_IDS=<user id>    # required for group/supergroup control
 ```
 
-Vipera does **not** auto-register the first chat for safety — you must set `TELEGRAM_CHAT_ID` explicitly. For groups, also set `TELEGRAM_ALLOWED_USER_IDS` or inbound commands are ignored.
+Gods Grace does **not** auto-register the first chat for safety — you must set `TELEGRAM_CHAT_ID` explicitly. For groups, also set `TELEGRAM_ALLOWED_USER_IDS` or inbound commands are ignored.
 
 `401 Unauthorized` in logs means a bad `TELEGRAM_BOT_TOKEN` (invalid, revoked, or encrypted without a working `.envrypt` key) — not a chat ID problem.
 
 ### Notifications
 
-Meridian sends notifications automatically for:
+Gods Grace sends notifications automatically for:
 - Management cycle reports (reasoning + decisions)
 - Screening cycle reports (what it found, whether it deployed)
 - OOR alerts when a position leaves range past `outOfRangeWaitMinutes`
@@ -548,7 +556,7 @@ This analyzes closed position performance (win rate, avg PnL, fee yields) and au
 HiveMind sync uses Agent Meridian at `https://api.agentmeridian.xyz` by default with the built-in public key. Agents can register, pull shared lessons/presets, and push learning events without a separate registration flow.
 
 **What you get:**
-- Shared lessons from other Meridian agents
+- Shared lessons from other Agent Meridian peers
 - Strategy presets and crowd performance context
 - Role-aware lessons injected into future screener/manager prompts when `hiveMindPullMode` is `auto`
 
