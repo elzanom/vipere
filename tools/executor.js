@@ -205,6 +205,19 @@ async function validateDeployPoolThresholds(args) {
     };
   }
 
+  // ── 24h fee/TVL check ─────────────────────────────────────────
+  const minFee24h = numberOrNull(config.management?.minFeePerTvl24h);
+  if (minFee24h != null && minFee24h > 0) {
+    const fee24hDetail = await fetchFreshPoolDetail(args.pool_address, "24h").catch(() => null);
+    const fee24hRatio = numberOrNull(fee24hDetail?.fee_active_tvl_ratio);
+    if (fee24hRatio != null && fee24hRatio < minFee24h) {
+      return {
+        pass: false,
+        reason: `Pool 24h fee/TVL ${fee24hRatio.toFixed(2)}% is below configured minimum ${minFee24h}%.`,
+      };
+    }
+  }
+
   const baseMint = detail?.token_x?.address || detail?.base_token_address || null;
   const entryMarketData = {
     entry_mcap: numberOrNull(detail?.token_x?.market_cap ?? detail?.base_token_market_cap),
@@ -473,7 +486,7 @@ const toolMap = {
       hiveMindApiKey: ["hiveMind", "apiKey"],
       agentId: ["hiveMind", "agentId"],
       hiveMindPullMode: ["hiveMind", "pullMode"],
-      // meridian api / relay
+      // Agent Meridian API / relay
       publicApiKey: ["api", "publicApiKey"],
       agentMeridianApiUrl: ["api", "url"],
       lpAgentRelayEnabled: ["api", "lpAgentRelayEnabled"],

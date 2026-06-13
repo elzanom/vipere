@@ -229,7 +229,7 @@ export async function generateDailyPnLImage({
 
   ctx.fillStyle = '#64748b';
   ctx.font = '22px "Share Tech Mono"';
-  const domain = agentName === 'VIPERA' ? 'vipera.trade' : 'charon.trade';
+  const domain = agentName === 'VIPERA' ? 'vipera.trade' : 'vipera.trade';
   ctx.fillText(domain, 40, 600);
   
   ctx.textAlign = 'right';

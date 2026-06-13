@@ -103,7 +103,7 @@ export const config = {
     minClaimAmount:        u.minClaimAmount        ?? 5,
     autoSwapAfterClaim:    u.autoSwapAfterClaim    ?? false,
     outOfRangeBinsToClose: u.outOfRangeBinsToClose ?? 10,
-    autoRebalanceEnabled:  u.autoRebalanceEnabled  ?? false, // disabled by default in meridian for safety
+    autoRebalanceEnabled:  u.autoRebalanceEnabled  ?? false, // disabled by default for safety
     outOfRangeWaitMinutes: u.outOfRangeWaitMinutes ?? 30,
     oorCooldownTriggerCount: u.oorCooldownTriggerCount ?? 3,
     oorCooldownHours:       u.oorCooldownHours       ?? 12,

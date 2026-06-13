@@ -829,6 +829,42 @@ export async function getTopCandidates({ limit = 10 } = {}) {
     if (eligible.length < before) log("dev_blocklist", `Filtered ${before - eligible.length} pool(s) via OKX creator check`);
   }
 
+  // ── 24h Fee/TVL Filter ──────────────────────────────────────────
+  const minFee24h = config.management?.minFeePerTvl24h;
+  if (minFee24h != null && minFee24h > 0 && eligible.length > 0) {
+    const fee24hResults = await Promise.allSettled(
+      eligible.map((p) =>
+        fetchPoolDiscoveryDetail({ poolAddress: p.pool, timeframe: "24h" })
+          .then((detail) => ({
+            pool: p.pool,
+            fee24hRatio: numeric(detail?.fee_active_tvl_ratio),
+          }))
+      )
+    );
+    const before = eligible.length;
+    const fee24hMap = new Map();
+    for (const r of fee24hResults) {
+      if (r.status === "fulfilled" && r.value?.fee24hRatio != null) {
+        fee24hMap.set(r.value.pool, r.value.fee24hRatio);
+      }
+    }
+    const kept = eligible.filter((p) => {
+      const ratio = fee24hMap.get(p.pool);
+      if (ratio == null) return true; // no 24h data → let deploy gate handle it
+      if (ratio < minFee24h) {
+        log("screening", `24h fee/TVL: dropped ${p.name} — ${ratio.toFixed(2)}% < ${minFee24h}%`);
+        pushFilteredReason(filteredOut, p, `24h fee/TVL ${ratio.toFixed(2)}% < ${minFee24h}%`);
+        return false;
+      }
+      p.fee_per_tvl_24h = ratio; // enrich for LLM
+      return true;
+    });
+    eligible.splice(0, eligible.length, ...kept);
+    if (eligible.length < before) {
+      log("screening", `24h fee/TVL filter removed ${before - eligible.length} candidate(s)`);
+    }
+  }
+
   if (config.indicators.enabled && eligible.length > 0) {
     const confirmations = await Promise.all(
       eligible.map(async (pool) => {

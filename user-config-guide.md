@@ -1,4 +1,4 @@
-# Meridian user-config.json Guide
+# Vipera user-config.json Guide
 
 Panduan ini menjelaskan fungsi setiap key utama di `user-config.json`.
 File config asli sengaja dibiarkan sebagai JSON murni tanpa komentar.
@@ -183,4 +183,3 @@ File config asli sengaja dibiarkan sebagai JSON murni tanpa komentar.
 | Key | Keterangan |
 | --- | --- |
 | `_lastAgentTune` | Timestamp terakhir tuning otomatis/manual. |
-

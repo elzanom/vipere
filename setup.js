@@ -212,7 +212,7 @@ const ev = (key, fallback) => existingEnv[key] ?? fallback;
 // ─── Banner ────────────────────────────────────────────────────────────────────
 console.log(`
 ╔═══════════════════════════════════════════════╗
-║        Vipera — Setup Wizard                  ║
+║        Vipera — Setup Wizard              ║
 ║        Autonomous Meteora DLMM LP Agent       ║
 ╚═══════════════════════════════════════════════╝
 

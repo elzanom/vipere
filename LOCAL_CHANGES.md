@@ -1,6 +1,6 @@
 # 📝 Dokumentasi Perubahan Lokal (Local Changes Tracker)
 
-Berkas ini melacak semua kustomisasi lokal yang telah dibuat pada **Meridian Agent (Vipera)**, dipisahkan secara jelas antara perubahan logika utama (*backend/core engine*) dan pengalaman pengguna (*UI/UX/reporting*), terlepas dari repositori utama GitHub (`yunus-0x/meridian`).
+Berkas ini melacak semua kustomisasi lokal yang telah dibuat pada **Vipera Agent**, dipisahkan secara jelas antara perubahan logika utama (*backend/core engine*) dan pengalaman pengguna (*UI/UX/reporting*), terlepas dari repositori utama GitHub (`yunus-0x/meridian`).
 
 ---
 
