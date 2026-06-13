@@ -59,7 +59,7 @@ export async function generatePnLImage({
   // Header
   ctx.fillStyle = '#f97316';
   ctx.font = 'bold 36px Rajdhani';
-  ctx.fillText('⚡ GODS GRACE', 40, 60);
+  ctx.fillText('⚡ VIPERA', 40, 60);
   
   // Pair
   ctx.fillStyle = '#f8fafc';
@@ -116,7 +116,7 @@ export async function generatePnLImage({
   // Bottom watermark
   ctx.fillStyle = '#64748b';
   ctx.font = '22px "Share Tech Mono"';
-  ctx.fillText('godsgrace.trade', 40, 600);
+  ctx.fillText('vipera.trade', 40, 600);
   
   ctx.textAlign = 'right';
   const date = new Date();
@@ -229,7 +229,7 @@ export async function generateDailyPnLImage({
 
   ctx.fillStyle = '#64748b';
   ctx.font = '22px "Share Tech Mono"';
-  const domain = agentName === 'GODS GRACE' ? 'godsgrace.trade' : 'charon.trade';
+  const domain = agentName === 'VIPERA' ? 'vipera.trade' : 'vipera.trade';
   ctx.fillText(domain, 40, 600);
   
   ctx.textAlign = 'right';

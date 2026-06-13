@@ -1,5 +1,5 @@
 /**
- * Gods Grace Discord listener — selfbot
+ * Vipera Discord listener — selfbot
  * Watches LP Army channels for Solana addresses and runs pre-check pipeline.
  * Uses discord.js-selfbot-v13 (personal automation, not a bot token).
  *
@@ -103,7 +103,7 @@ if (CHANNEL_IDS.length === 0) {
 const client = new Client({ checkUpdate: false });
 
 client.on("ready", () => {
-  console.log(`\n[gods-grace discord-listener] Connected as ${client.user?.tag}`);
+  console.log(`\n[vipera discord-listener] Connected as ${client.user?.tag}`);
   const guild = client.guilds.cache.get(GUILD_ID);
   if (!guild) {
     console.warn(`WARNING: Guild ${GUILD_ID} not found in cache. Check DISCORD_GUILD_ID.`);

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * gods-grace — Solana DLMM LP Agent CLI
+ * vipera — Solana DLMM LP Agent CLI
  * Direct tool invocation with JSON output. Agent-native.
  */
 
@@ -16,18 +16,27 @@ import { repoPath } from "./repo-root.js";
 // ─── DRY_RUN must be set before any tool imports ─────────────────
 if (process.argv.includes("--dry-run")) process.env.DRY_RUN = "true";
 
-const CLI_NAME = "gods-grace";
+const CLI_NAME = "vipera";
 
-// ─── Load .env from ~/.gods-grace/ or legacy ~/.meridian/ if present ───────
-const godsGraceDir = path.join(os.homedir(), ".gods-grace");
+// ─── Load .env from ~/.vipera/, legacy ~/.vipera/, or ~/.meridian/ ──
+const viperaDir = path.join(os.homedir(), ".vipera");
+const legacyGodsGraceDir = path.join(os.homedir(), ".vipera");
 const legacyMeridianDir = path.join(os.homedir(), ".meridian");
-const godsGraceEnv = path.join(godsGraceDir, ".env");
+const viperaEnv = path.join(viperaDir, ".env");
+const godsGraceEnv = path.join(legacyGodsGraceDir, ".env");
 const legacyMeridianEnv = path.join(legacyMeridianDir, ".env");
-const activeDataDir = fs.existsSync(godsGraceEnv) || !fs.existsSync(legacyMeridianEnv)
-  ? godsGraceDir
-  : legacyMeridianDir;
+let activeDataDir;
+if (fs.existsSync(viperaEnv)) {
+  activeDataDir = viperaDir;
+} else if (fs.existsSync(godsGraceEnv)) {
+  activeDataDir = legacyGodsGraceDir;
+} else {
+  activeDataDir = fs.existsSync(legacyMeridianEnv) ? legacyMeridianDir : viperaDir;
+}
 const activeEnv = path.join(activeDataDir, ".env");
-const dataDirLabel = activeDataDir === legacyMeridianDir ? "~/.meridian/ (legacy)" : "~/.gods-grace/";
+const dataDirLabel = activeDataDir === viperaDir ? "~/.vipera/"
+  : activeDataDir === legacyGodsGraceDir ? "~/.vipera/ (legacy)"
+  : "~/.meridian/ (legacy)";
 
 if (fs.existsSync(activeEnv)) {
   loadEnv({
@@ -54,172 +63,172 @@ Data dir: ${dataDirLabel}
 
 ## Commands
 
-### gods-grace balance
+### vipera balance
 Returns wallet SOL and token balances.
 \`\`\`
 Output: { wallet, sol, sol_usd, usdc, tokens: [{mint, symbol, balance, usd_value}], total_usd }
 \`\`\`
 
-### gods-grace positions
+### vipera positions
 Returns all open DLMM positions.
 \`\`\`
 Output: { positions: [{position, pool, pair, in_range, age_minutes, ...}], total_positions }
 \`\`\`
 
-### gods-grace pnl <position_address>
+### vipera pnl <position_address>
 Returns PnL for a specific position.
 \`\`\`
 Output: { pnl_pct, pnl_usd, unclaimed_fee_usd, all_time_fees_usd, current_value_usd, lower_bin, upper_bin, active_bin }
 \`\`\`
 
-### gods-grace screen [--dry-run] [--silent]
+### vipera screen [--dry-run] [--silent]
 Runs one AI screening cycle to find and deploy new positions.
 \`\`\`
 Output: { done: true, report: "..." }
 \`\`\`
 
-### gods-grace manage [--dry-run] [--silent]
+### vipera manage [--dry-run] [--silent]
 Runs one AI management cycle over open positions.
 \`\`\`
 Output: { done: true, report: "..." }
 \`\`\`
 
-### gods-grace deploy --pool <addr> --amount <sol> [--bins-below 69] [--bins-above 0] [--strategy bid_ask|spot] [--dry-run]
+### vipera deploy --pool <addr> --amount <sol> [--bins-below 69] [--bins-above 0] [--strategy bid_ask|spot] [--dry-run]
 Deploys a new LP position. All safety checks apply.
 \`\`\`
 Output: { success, position, pool_name, txs, price_range, bin_step }
 \`\`\`
 
-### gods-grace claim --position <addr>
+### vipera claim --position <addr>
 Claims accumulated swap fees for a position.
 \`\`\`
 Output: { success, position, txs, base_mint }
 \`\`\`
 
-### gods-grace close --position <addr> [--skip-swap] [--dry-run]
+### vipera close --position <addr> [--skip-swap] [--dry-run]
 Closes a position. Auto-swaps base token to SOL unless --skip-swap.
 \`\`\`
 Output: { success, pnl_pct, pnl_usd, txs, base_mint }
 \`\`\`
 
-### gods-grace swap --from <mint> --to <mint> --amount <n> [--dry-run]
+### vipera swap --from <mint> --to <mint> --amount <n> [--dry-run]
 Swaps tokens via Jupiter. Use "SOL" as mint shorthand.
 \`\`\`
 Output: { success, tx, input_amount, output_amount }
 \`\`\`
 
-### gods-grace candidates [--limit 5]
+### vipera candidates [--limit 5]
 Returns top pool candidates fully enriched: pool metrics, token audit, holders, smart wallets, narrative, active bin, pool memory.
 \`\`\`
 Output: { candidates: [{name, pool, bin_step, fee_pct, volume, tvl, organic_score, active_bin, smart_wallets, token: {holders, audit, global_fees_sol, ...}, holders, narrative, pool_memory}] }
 \`\`\`
 
-### gods-grace study --pool <addr> [--limit 4]
+### vipera study --pool <addr> [--limit 4]
 Studies top LPers on a pool. Returns behaviour patterns, hold times, win rates, strategies.
 \`\`\`
 Output: { pool, patterns: {top_lper_count, avg_hold_hours, avg_win_rate, ...}, lpers: [{owner, summary, positions}] }
 \`\`\`
 
-### gods-grace token-info --query <mint_or_symbol>
+### vipera token-info --query <mint_or_symbol>
 Returns token audit, mcap, launchpad, price stats, fee data.
 \`\`\`
 Output: { results: [{mint, symbol, mcap, launchpad, audit, stats_1h, global_fees_sol, ...}] }
 \`\`\`
 
-### gods-grace token-holders --mint <addr> [--limit 20]
+### vipera token-holders --mint <addr> [--limit 20]
 Returns holder distribution, bot %, top holder concentration.
 \`\`\`
 Output: { mint, holders, top_10_real_holders_pct, bundlers_pct_in_top_100, global_fees_sol, ... }
 \`\`\`
 
-### gods-grace token-narrative --mint <addr>
+### vipera token-narrative --mint <addr>
 Returns AI-generated narrative about the token.
 \`\`\`
 Output: { mint, narrative }
 \`\`\`
 
-### gods-grace pool-detail --pool <addr> [--timeframe 5m]
+### vipera pool-detail --pool <addr> [--timeframe 5m]
 Returns detailed pool metrics for a specific pool.
 \`\`\`
 Output: { pool, name, bin_step, fee_pct, volume, tvl, volatility, ... }
 \`\`\`
 
-### gods-grace search-pools --query <name_or_symbol> [--limit 10]
+### vipera search-pools --query <name_or_symbol> [--limit 10]
 Searches pools by name or token symbol.
 \`\`\`
 Output: { pools: [{pool, name, bin_step, fee_pct, tvl, volume, ...}] }
 \`\`\`
 
-### gods-grace active-bin --pool <addr>
+### vipera active-bin --pool <addr>
 Returns the current active bin for a pool.
 \`\`\`
 Output: { pool, binId, price }
 \`\`\`
 
-### gods-grace wallet-positions --wallet <addr>
+### vipera wallet-positions --wallet <addr>
 Returns DLMM positions for any wallet address.
 \`\`\`
 Output: { wallet, positions: [...], total_positions }
 \`\`\`
 
-### gods-grace config get
+### vipera config get
 Returns the full runtime config.
 
-### gods-grace config set <key> <value>
+### vipera config set <key> <value>
 Updates a config key. Parses value as JSON when possible.
 \`\`\`
 Valid keys: minTvl, maxTvl, minVolume, maxPositions, deployAmountSol, managementIntervalMin, screeningIntervalMin, managementModel, screeningModel, generalModel, autoSwapAfterClaim, minClaimAmount, outOfRangeWaitMinutes
 \`\`\`
 
-### gods-grace lessons [--limit 50]
+### vipera lessons [--limit 50]
 Lists all lessons from lessons.json. Shows rule, tags, pinned status, outcome, role.
 \`\`\`
 Output: { total, lessons: [{id, rule, tags, outcome, pinned, role, created_at}] }
 \`\`\`
 
-### gods-grace lessons add <text>
+### vipera lessons add <text>
 Adds a manual lesson with outcome=manual, role=null (applies to all roles).
 \`\`\`
 Output: { saved: true, rule, outcome, role }
 \`\`\`
 
-### gods-grace pool-memory --pool <addr>
+### vipera pool-memory --pool <addr>
 Returns deploy history for a specific pool from pool-memory.json.
 \`\`\`
 Output: { pool_address, known, name, total_deploys, win_rate, avg_pnl_pct, last_outcome, notes, history }
 \`\`\`
 
-### gods-grace evolve
+### vipera evolve
 Runs evolveThresholds() over all closed position data and updates user-config.json.
 \`\`\`
 Output: { evolved, changes, rationale }
 \`\`\`
 
-### gods-grace blacklist add --mint <addr> --reason <text>
+### vipera blacklist add --mint <addr> --reason <text>
 Permanently blacklists a token mint so it is never deployed into.
 \`\`\`
 Output: { blacklisted, mint, reason }
 \`\`\`
 
-### gods-grace blacklist list
+### vipera blacklist list
 Lists all blacklisted token mints with reasons and timestamps.
 \`\`\`
 Output: { count, blacklist: [{mint, symbol, reason, added_at}] }
 \`\`\`
 
-### gods-grace performance [--limit 200]
+### vipera performance [--limit 200]
 Shows all closed position performance history with summary stats.
 \`\`\`
 Output: { summary: { total_positions_closed, total_pnl_usd, avg_pnl_pct, win_rate_pct, total_lessons }, count, positions: [...] }
 \`\`\`
 
-### gods-grace discord-signals [clear]
+### vipera discord-signals [clear]
 Shows pending Discord signal queue from the discord-listener process.
 \`\`\`
 Output: { count, pending, processed, signals: [{id, symbol, pool, author, channel, queued_at, rug_score, status}] }
 \`\`\`
 
-### gods-grace start [--dry-run]
+### vipera start [--dry-run]
 Starts the autonomous agent with cron jobs (management + screening).
 
 ## Flags
@@ -293,7 +302,7 @@ switch (subcommand) {
   case "pnl": {
     const posAddr = argv.find((a, i) => !a.startsWith("-") && i > 0 && argv[i - 1] !== "--position" && a !== "pnl");
     const positionAddress = flags.position || posAddr;
-    if (!positionAddress) die("Usage: gods-grace pnl <position_address>");
+    if (!positionAddress) die("Usage: vipera pnl <position_address>");
 
     const { getTrackedPosition } = await import("./state.js");
     const { getPositionPnl, getMyPositions } = await import("./tools/dlmm.js");
@@ -383,7 +392,7 @@ switch (subcommand) {
   // ── token-info ──────────────────────────────────────────────────
   case "token-info": {
     const query = flags.query || flags.mint || argv.find((a, i) => !a.startsWith("-") && i > 0 && a !== "token-info");
-    if (!query) die("Usage: gods-grace token-info --query <mint_or_symbol>");
+    if (!query) die("Usage: vipera token-info --query <mint_or_symbol>");
     const { getTokenInfo } = await import("./tools/token.js");
     out(await getTokenInfo({ query }));
     break;
@@ -392,7 +401,7 @@ switch (subcommand) {
   // ── token-holders ─────────────────────────────────────────────
   case "token-holders": {
     const mint = flags.mint || argv.find((a, i) => !a.startsWith("-") && i > 0 && a !== "token-holders");
-    if (!mint) die("Usage: gods-grace token-holders --mint <addr>");
+    if (!mint) die("Usage: vipera token-holders --mint <addr>");
     const { getTokenHolders } = await import("./tools/token.js");
     const limit = flags.limit ? parseInt(flags.limit) : 20;
     out(await getTokenHolders({ mint, limit }));
@@ -402,7 +411,7 @@ switch (subcommand) {
   // ── token-narrative ───────────────────────────────────────────
   case "token-narrative": {
     const mint = flags.mint || argv.find((a, i) => !a.startsWith("-") && i > 0 && a !== "token-narrative");
-    if (!mint) die("Usage: gods-grace token-narrative --mint <addr>");
+    if (!mint) die("Usage: vipera token-narrative --mint <addr>");
     const { getTokenNarrative } = await import("./tools/token.js");
     out(await getTokenNarrative({ mint }));
     break;
@@ -410,7 +419,7 @@ switch (subcommand) {
 
   // ── pool-detail ───────────────────────────────────────────────
   case "pool-detail": {
-    if (!flags.pool) die("Usage: gods-grace pool-detail --pool <addr> [--timeframe 5m]");
+    if (!flags.pool) die("Usage: vipera pool-detail --pool <addr> [--timeframe 5m]");
     const { getPoolDetail } = await import("./tools/screening.js");
     out(await getPoolDetail({ pool_address: flags.pool, timeframe: flags.timeframe || "5m" }));
     break;
@@ -419,7 +428,7 @@ switch (subcommand) {
   // ── search-pools ──────────────────────────────────────────────
   case "search-pools": {
     const query = flags.query || argv.find((a, i) => !a.startsWith("-") && i > 0 && a !== "search-pools");
-    if (!query) die("Usage: gods-grace search-pools --query <name_or_symbol>");
+    if (!query) die("Usage: vipera search-pools --query <name_or_symbol>");
     const { searchPools } = await import("./tools/dlmm.js");
     const limit = flags.limit ? parseInt(flags.limit) : 10;
     out(await searchPools({ query, limit }));
@@ -428,7 +437,7 @@ switch (subcommand) {
 
   // ── active-bin ────────────────────────────────────────────────
   case "active-bin": {
-    if (!flags.pool) die("Usage: gods-grace active-bin --pool <addr>");
+    if (!flags.pool) die("Usage: vipera active-bin --pool <addr>");
     const { getActiveBin } = await import("./tools/dlmm.js");
     out(await getActiveBin({ pool_address: flags.pool }));
     break;
@@ -437,7 +446,7 @@ switch (subcommand) {
   // ── wallet-positions ──────────────────────────────────────────
   case "wallet-positions": {
     const wallet = flags.wallet || argv.find((a, i) => !a.startsWith("-") && i > 0 && a !== "wallet-positions");
-    if (!wallet) die("Usage: gods-grace wallet-positions --wallet <addr>");
+    if (!wallet) die("Usage: vipera wallet-positions --wallet <addr>");
     const { getWalletPositions } = await import("./tools/dlmm.js");
     out(await getWalletPositions({ wallet_address: wallet }));
     break;
@@ -445,7 +454,7 @@ switch (subcommand) {
 
   // ── deploy ───────────────────────────────────────────────────────
   case "deploy": {
-    if (!flags.pool) die("Usage: gods-grace deploy --pool <addr> --amount <sol>");
+    if (!flags.pool) die("Usage: vipera deploy --pool <addr> --amount <sol>");
     const amountX = flags["amount-x"] ? parseFloat(flags["amount-x"]) : undefined;
     if (!flags.amount && !amountX) die("--amount or --amount-x is required");
 
@@ -465,7 +474,7 @@ switch (subcommand) {
 
   // ── claim ────────────────────────────────────────────────────────
   case "claim": {
-    if (!flags.position) die("Usage: gods-grace claim --position <addr>");
+    if (!flags.position) die("Usage: vipera claim --position <addr>");
     const { executeTool } = await import("./tools/executor.js");
     out(await executeTool("claim_fees", { position_address: flags.position }));
     break;
@@ -473,7 +482,7 @@ switch (subcommand) {
 
   // ── close ────────────────────────────────────────────────────────
   case "close": {
-    if (!flags.position) die("Usage: gods-grace close --position <addr>");
+    if (!flags.position) die("Usage: vipera close --position <addr>");
     const { executeTool } = await import("./tools/executor.js");
     out(await executeTool("close_position", {
       position_address: flags.position,
@@ -484,7 +493,7 @@ switch (subcommand) {
 
   // ── swap ─────────────────────────────────────────────────────────
   case "swap": {
-    if (!flags.from || !flags.to || !flags.amount) die("Usage: gods-grace swap --from <mint> --to <mint> --amount <n>");
+    if (!flags.from || !flags.to || !flags.amount) die("Usage: vipera swap --from <mint> --to <mint> --amount <n>");
     const { executeTool } = await import("./tools/executor.js");
     out(await executeTool("swap_token", {
       input_mint: flags.from,
@@ -518,7 +527,7 @@ switch (subcommand) {
     } else if (sub2 === "set") {
       const key = argv.filter(a => !a.startsWith("-"))[2];
       const rawVal = argv.filter(a => !a.startsWith("-"))[3];
-      if (!key || rawVal === undefined) die("Usage: gods-grace config set <key> <value>");
+      if (!key || rawVal === undefined) die("Usage: vipera config set <key> <value>");
       let value = rawVal;
       try { value = JSON.parse(rawVal); } catch { /* keep as string */ }
       const { executeTool } = await import("./tools/executor.js");
@@ -531,7 +540,7 @@ switch (subcommand) {
 
   // ── study ────────────────────────────────────────────────────────
   case "study": {
-    if (!flags.pool) die("Usage: gods-grace study --pool <addr> [--limit 4]");
+    if (!flags.pool) die("Usage: vipera study --pool <addr> [--limit 4]");
     const { studyTopLPers } = await import("./tools/study.js");
     const limit = flags.limit ? parseInt(flags.limit) : 4;
     out(await studyTopLPers({ pool_address: flags.pool, limit }));
@@ -541,7 +550,7 @@ switch (subcommand) {
   // ── start ────────────────────────────────────────────────────────
   case "start": {
     const { startCronJobs } = await import("./index.js");
-    process.stderr.write("[gods-grace] Starting autonomous agent...\n");
+    process.stderr.write("[vipera] Starting autonomous agent...\n");
     startCronJobs();
     break;
   }
@@ -550,7 +559,7 @@ switch (subcommand) {
   case "lessons": {
     if (sub2 === "add") {
       const text = argv.filter(a => !a.startsWith("-")).slice(2).join(" ");
-      if (!text) die("Usage: gods-grace lessons add <text>");
+      if (!text) die("Usage: vipera lessons add <text>");
       const { addLesson } = await import("./lessons.js");
       addLesson(text, [], { pinned: false, role: null });
       out({ saved: true, rule: text, outcome: "manual", role: null });
@@ -564,7 +573,7 @@ switch (subcommand) {
 
   // ── pool-memory ──────────────────────────────────────────────────
   case "pool-memory": {
-    if (!flags.pool) die("Usage: gods-grace pool-memory --pool <addr>");
+    if (!flags.pool) die("Usage: vipera pool-memory --pool <addr>");
     const { getPoolMemory } = await import("./pool-memory.js");
     out(getPoolMemory({ pool_address: flags.pool }));
     break;
@@ -592,7 +601,7 @@ switch (subcommand) {
   // ── blacklist ────────────────────────────────────────────────────
   case "blacklist": {
     if (sub2 === "add") {
-      if (!flags.mint) die("Usage: gods-grace blacklist add --mint <addr> --reason <text>");
+      if (!flags.mint) die("Usage: vipera blacklist add --mint <addr> --reason <text>");
       if (!flags.reason) die("--reason is required");
       const { addToBlacklist } = await import("./token-blacklist.js");
       out(addToBlacklist({ mint: flags.mint, reason: flags.reason }));
@@ -656,7 +665,7 @@ switch (subcommand) {
 
   // ── withdraw-liquidity ─────────────────────────────────────────
   case "withdraw-liquidity": {
-    if (!flags.position) die("Usage: gods-grace withdraw-liquidity --position <addr> --pool <addr> [--bps 10000]");
+    if (!flags.position) die("Usage: vipera withdraw-liquidity --position <addr> --pool <addr> [--bps 10000]");
     if (!flags.pool) die("--pool is required");
     const { withdrawLiquidity } = await import("./tools/dlmm.js");
     out(await withdrawLiquidity({
@@ -670,7 +679,7 @@ switch (subcommand) {
 
   // ── add-liquidity ──────────────────────────────────────────────
   case "add-liquidity": {
-    if (!flags.position) die("Usage: gods-grace add-liquidity --position <addr> --pool <addr> [--amount-x <n>] [--amount-y <n>]");
+    if (!flags.position) die("Usage: vipera add-liquidity --position <addr> --pool <addr> [--amount-x <n>] [--amount-y <n>]");
     if (!flags.pool) die("--pool is required");
     const { addLiquidity } = await import("./tools/dlmm.js");
     out(await addLiquidity({
@@ -685,5 +694,5 @@ switch (subcommand) {
   }
 
   default:
-    die(`Unknown command: ${subcommand}. Run 'gods-grace help' for usage.`);
+    die(`Unknown command: ${subcommand}. Run 'vipera help' for usage.`);
 }

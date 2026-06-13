@@ -1,11 +1,11 @@
-# Gods Grace
+# Vipera
 
 **An autonomous, production-hardened Meteora DLMM liquidity management agent for Solana, powered by LLMs.**
 
 **Developed & Maintained by:** [elzanom](https://github.com/elzanom)  
 **Based on:** Upstream [Meridian](https://github.com/yunus-0x/meridian)
 
-Gods Grace is a highly customized, production-hardened fork of the Meridian DLMM LP agent. It has been extensively optimized by **elzanom** to feature strict anti-rugpull screening (RugCheck API + Low Organic Filter), real-time state index lag recovery, PM2 lifecycle hardening, dynamic Kelly criterion sizing, and an advanced graphical daily PnL briefing via Telegram.
+Vipera is a highly customized, production-hardened fork of the Meridian DLMM LP agent. It has been extensively optimized by **elzanom** to feature strict anti-rugpull screening (RugCheck API + Low Organic Filter), real-time state index lag recovery, PM2 lifecycle hardening, dynamic Kelly criterion sizing, and an advanced graphical daily PnL briefing via Telegram.
 
 ---
 
@@ -22,7 +22,7 @@ Gods Grace is a highly customized, production-hardened fork of the Meridian DLMM
 
 ## How it works
 
-Gods Grace runs a **ReAct agent loop** — each cycle the LLM reasons over live data, calls tools, and acts. Two specialized agents run on independent cron schedules:
+Vipera runs a **ReAct agent loop** — each cycle the LLM reasons over live data, calls tools, and acts. Two specialized agents run on independent cron schedules:
 
 | Agent | Default interval | Role |
 |---|---|---|
@@ -31,7 +31,7 @@ Gods Grace runs a **ReAct agent loop** — each cycle the LLM reasons over live 
 
 ### Agent harness
 
-Gods Grace's agent harness is the runtime wrapper around every autonomous cycle. It gives both **main** and **experimental** agents the same control loop: load live state, inject relevant memory, expose only role-appropriate tools, execute tool calls, and return a readable cycle report.
+Vipera's agent harness is the runtime wrapper around every autonomous cycle. It gives both **main** and **experimental** agents the same control loop: load live state, inject relevant memory, expose only role-appropriate tools, execute tool calls, and return a readable cycle report.
 
 The harness also keeps a structured decision log in `decision-log.json` for deployments, closes, skips, and no-deploy outcomes. Each entry records the actor, pool or position, summary, reason, key risks, metrics, and rejected alternatives. Recent decisions are injected back into the system prompt and are available through `get_recent_decisions`, so the agent can answer "why did you deploy?", "why did you close?", or "why did you skip?" without guessing after the fact.
 
@@ -62,8 +62,8 @@ Agents are powered via **OpenRouter** and can be swapped for any compatible mode
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/elzanom/vipere gods-grace
-cd gods-grace
+git clone https://github.com/elzanom/vipere vipera
+cd vipera
 npm install
 ```
 
@@ -99,7 +99,7 @@ printf "replace-with-a-long-local-key\n" > .envrypt
 npm run env:encrypt
 ```
 
-Gods Grace loads envrypt-style encrypted values automatically. Keep `.env.raw` and `.envrypt` local; both are gitignored.
+Vipera loads envrypt-style encrypted values automatically. Keep `.env.raw` and `.envrypt` local; both are gitignored.
 
 Copy config and edit as needed:
 
@@ -116,7 +116,7 @@ npm run dev    # dry run — no on-chain transactions
 npm start      # live mode
 ```
 
-On startup Gods Grace fetches your wallet balance, open positions, and top pool candidates, then begins autonomous cycles immediately.
+On startup Vipera fetches your wallet balance, open positions, and top pool candidates, then begins autonomous cycles immediately.
 
 ### Run with PM2
 
@@ -135,7 +135,7 @@ npm run pm2:restart  # re-reads .env on each restart
 npm run pm2:logs
 ```
 
-If you are migrating from the old `vipera` PM2 process name, delete it once before starting Gods Grace:
+If you are migrating from the old `vipera` PM2 process name, delete it once before starting Vipera:
 
 ```bash
 pm2 delete vipera
@@ -155,7 +155,7 @@ pm2 save
 If a previous PM2 run was started incorrectly, reset it once:
 
 ```bash
-pm2 delete gods-grace
+pm2 delete vipera
 npm run pm2:start
 pm2 save
 ```
@@ -176,7 +176,7 @@ On startup, logs show `Repo: ... | cwd: ... | PM2 id: ...`. **Repo and cwd must 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Crash loop after `git pull` | `npm install` skipped | `npm install && npm run pm2:restart` |
-| Missing wallet / API keys | Started with `pm2 start index.js` from wrong directory | `pm2 delete gods-grace && npm run pm2:start` |
+| Missing wallet / API keys | Started with `pm2 start index.js` from wrong directory | `pm2 delete vipera && npm run pm2:start` |
 | `.env` changes ignored | Old PM2 env snapshot | `npm run pm2:restart` (`.env` now overrides stale PM2 env) |
 | Telegram `401 Unauthorized` | Invalid `TELEGRAM_BOT_TOKEN` (not chat ID) | Fix token in `.env`; if encrypted, ensure `.envrypt` exists |
 | Telegram commands ignored | Missing/wrong `TELEGRAM_CHAT_ID` | Set in `.env` (or `telegramChatId` in `user-config.json`) |
@@ -219,10 +219,10 @@ REPL commands:
 
 ### Claude Code terminal (recommended)
 
-Install [Claude Code](https://claude.ai/code) and use it from inside the project directory. Claude Code has built-in agents and slash commands that use the `gods-grace` CLI under the hood.
+Install [Claude Code](https://claude.ai/code) and use it from inside the project directory. Claude Code has built-in agents and slash commands that use the `vipera` CLI under the hood.
 
 ```bash
-cd gods-grace
+cd vipera
 claude
 ```
 
@@ -267,11 +267,11 @@ Run screening or management on a timer inside Claude Code:
 
 ### CLI (direct tool invocation)
 
-The `gods-grace` CLI gives you direct access to every tool with JSON output — useful for scripting, debugging, or piping into other tools. The legacy `meridian` alias is still available.
+The `vipera` CLI gives you direct access to every tool with JSON output — useful for scripting, debugging, or piping into other tools. The legacy `meridian` alias is still available.
 
 ```bash
 npm install -g .   # install globally (once)
-gods-grace <command> [flags]
+vipera <command> [flags]
 ```
 
 Or run without installing:
@@ -283,83 +283,83 @@ node cli.js <command> [flags]
 **Positions & PnL**
 
 ```bash
-gods-grace positions
-gods-grace pnl <position_address>
-gods-grace wallet-positions --wallet <addr>
+vipera positions
+vipera pnl <position_address>
+vipera wallet-positions --wallet <addr>
 ```
 
 **Screening**
 
 ```bash
-gods-grace candidates --limit 5
-gods-grace pool-detail --pool <addr> [--timeframe 5m]
-gods-grace active-bin --pool <addr>
-gods-grace search-pools --query <name_or_symbol>
-gods-grace study --pool <addr> [--limit 4]
+vipera candidates --limit 5
+vipera pool-detail --pool <addr> [--timeframe 5m]
+vipera active-bin --pool <addr>
+vipera search-pools --query <name_or_symbol>
+vipera study --pool <addr> [--limit 4]
 ```
 
 **Token research**
 
 ```bash
-gods-grace token-info --query <mint_or_symbol>
-gods-grace token-holders --mint <addr> [--limit 20]
-gods-grace token-narrative --mint <addr>
+vipera token-info --query <mint_or_symbol>
+vipera token-holders --mint <addr> [--limit 20]
+vipera token-narrative --mint <addr>
 ```
 
 **Deploy & manage**
 
 ```bash
-gods-grace deploy --pool <addr> --amount <sol> [--bins-below 69] [--bins-above 0] [--strategy bid_ask|spot|curve] [--dry-run]
-gods-grace claim --position <addr>
-gods-grace close --position <addr> [--skip-swap] [--dry-run]
-gods-grace swap --from <mint> --to <mint> --amount <n> [--dry-run]
-gods-grace add-liquidity --position <addr> --pool <addr> [--amount-x <n>] [--amount-y <n>] [--strategy spot]
-gods-grace withdraw-liquidity --position <addr> --pool <addr> [--bps 10000]
+vipera deploy --pool <addr> --amount <sol> [--bins-below 69] [--bins-above 0] [--strategy bid_ask|spot|curve] [--dry-run]
+vipera claim --position <addr>
+vipera close --position <addr> [--skip-swap] [--dry-run]
+vipera swap --from <mint> --to <mint> --amount <n> [--dry-run]
+vipera add-liquidity --position <addr> --pool <addr> [--amount-x <n>] [--amount-y <n>] [--strategy spot]
+vipera withdraw-liquidity --position <addr> --pool <addr> [--bps 10000]
 ```
 
 **Agent cycles**
 
 ```bash
-gods-grace screen [--dry-run] [--silent]   # one AI screening cycle
-gods-grace manage [--dry-run] [--silent]   # one AI management cycle
-gods-grace start [--dry-run]               # start autonomous agent with cron jobs
+vipera screen [--dry-run] [--silent]   # one AI screening cycle
+vipera manage [--dry-run] [--silent]   # one AI management cycle
+vipera start [--dry-run]               # start autonomous agent with cron jobs
 ```
 
 **Config**
 
 ```bash
-gods-grace config get
-gods-grace config set <key> <value>
+vipera config get
+vipera config set <key> <value>
 ```
 
 **Learning & memory**
 
 ```bash
-gods-grace lessons
-gods-grace lessons add "your lesson text"
-gods-grace performance [--limit 200]
-gods-grace evolve
-gods-grace pool-memory --pool <addr>
+vipera lessons
+vipera lessons add "your lesson text"
+vipera performance [--limit 200]
+vipera evolve
+vipera pool-memory --pool <addr>
 ```
 
 **Blacklist**
 
 ```bash
-gods-grace blacklist list
-gods-grace blacklist add --mint <addr> --reason "reason"
+vipera blacklist list
+vipera blacklist add --mint <addr> --reason "reason"
 ```
 
 **Discord signals**
 
 ```bash
-gods-grace discord-signals
-gods-grace discord-signals clear
+vipera discord-signals
+vipera discord-signals clear
 ```
 
 **Balance**
 
 ```bash
-gods-grace balance
+vipera balance
 ```
 
 **Flags**
@@ -441,13 +441,13 @@ TELEGRAM_CHAT_ID=<your chat id>          # .env alone is enough; also saved to u
 TELEGRAM_ALLOWED_USER_IDS=<user id>    # required for group/supergroup control
 ```
 
-Gods Grace does **not** auto-register the first chat for safety — you must set `TELEGRAM_CHAT_ID` explicitly. For groups, also set `TELEGRAM_ALLOWED_USER_IDS` or inbound commands are ignored.
+Vipera does **not** auto-register the first chat for safety — you must set `TELEGRAM_CHAT_ID` explicitly. For groups, also set `TELEGRAM_ALLOWED_USER_IDS` or inbound commands are ignored.
 
 `401 Unauthorized` in logs means a bad `TELEGRAM_BOT_TOKEN` (invalid, revoked, or encrypted without a working `.envrypt` key) — not a chat ID problem.
 
 ### Notifications
 
-Gods Grace sends notifications automatically for:
+Vipera sends notifications automatically for:
 - Management cycle reports (reasoning + decisions)
 - Screening cycle reports (what it found, whether it deployed)
 - OOR alerts when a position leaves range past `outOfRangeWaitMinutes`

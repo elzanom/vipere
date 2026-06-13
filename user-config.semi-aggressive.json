@@ -103,7 +103,7 @@
   "darwinMinSamples": 8,
   "gmgnApiKey": "your-gmgn-key-here",
   "useGmgnApi": true,
-  "agentId": "agt_godsgrace",
+  "agentId": "agt_vipera",
   "publicApiKey": "bWVyaWRpYW4taXMtdGhlLWJlc3QtYWdlbnRz",
   "agentMeridianApiUrl": "https://api.agentmeridian.xyz/api",
   "lpAgentRelayEnabled": true,

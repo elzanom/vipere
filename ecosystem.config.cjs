@@ -5,7 +5,7 @@ const repoRoot = __dirname;
 module.exports = {
   apps: [
     {
-      name: "gods-grace",
+      name: "vipera",
       script: path.join(repoRoot, "index.js"),
       cwd: repoRoot,
       interpreter: "node",

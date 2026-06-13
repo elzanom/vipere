@@ -1602,7 +1602,7 @@ async function applySettingsMenuCallback(msg) {
 
 function formatHelpText() {
   return [
-    "🤖 Gods Grace Commands",
+    "🤖 Vipera Commands",
     "━━━━━━━━━━━━━━━━",
     "",
     "Status",
