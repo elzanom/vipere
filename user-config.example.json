@@ -1,24 +1,50 @@
 {
   "preset": "custom",
-  "rpcUrl": "https://pump.helius-rpc.com",
-  "llmBaseUrl": "",
-  "llmApiKey": "",
-  "llmModel": "deepseek/deepseek-v4-flash",
   "dryRun": true,
-  "deployAmountSol": 0.05,
-  "maxPositions": 1,
-  "minSolToOpen": 0.1,
-  "maxDeployAmount": 0.1,
-  "gasReserve": 0.05,
-  "positionSizePct": 0.20,
+
+  "rpcUrl": "https://pump.helius-rpc.com",
+  "llmBaseUrl": "https://openrouter.ai/api/v1",
+  "llmApiKey": "sk-or-...",
+  "llmModel": "anthropic/claude-3.5-sonnet",
+
+  "telegramChatId": "",
+  "telegramThreadId": null,
+  "telegramLogBehavior": "overwrite",
+
+  "agentId": "",
+  "publicApiKey": "",
+  "agentMeridianApiUrl": "https://api.agentmeridian.xyz/api",
+  "lpAgentRelayEnabled": false,
+
+  "gmgnApiKey": "",
+  "useGmgnApi": false,
+
+  "okxApiKey": "",
+  "okxSecretKey": "",
+  "okxPassphrase": "",
+  "okxProjectId": "",
+
+  "hiveMindUrl": "https://api.agentmeridian.xyz",
+  "hiveMindApiKey": "",
+  "hiveMindPullMode": "auto",
+
+  "temperature": 0.373,
+  "maxTokens": 4096,
+  "maxSteps": 20,
+  "managementModel": "",
+  "screeningModel": "",
+  "generalModel": "",
+
   "strategy": "bid_ask",
   "minBinsBelow": 35,
   "maxBinsBelow": 85,
   "defaultBinsBelow": 69,
-  "timeframe": "4h",
+
+  "timeframe": "5m",
   "category": "trending",
   "excludeHighSupplyConcentration": true,
-  "minTvl": 25000,
+
+  "minTvl": 10000,
   "maxTvl": 5000000,
   "minVolume": 2500,
   "minOrganic": 60,
@@ -31,6 +57,7 @@
   "minFeeActiveTvlRatio": 0.05,
   "maxVolatility": 15.0,
   "minTokenFeesSol": 30,
+
   "useDiscordSignals": false,
   "discordSignalMode": "merge",
   "avoidPvpSymbols": true,
@@ -43,31 +70,55 @@
   "minTokenAgeHours": null,
   "maxTokenAgeHours": null,
   "athFilterPct": null,
+
+  "deployAmountSol": 0.05,
+  "maxPositions": 1,
+  "minSolToOpen": 0.1,
+  "maxDeployAmount": 0.1,
+  "gasReserve": 0.05,
+  "positionSizePct": 0.20,
+
   "minClaimAmount": 5,
   "autoSwapAfterClaim": false,
   "outOfRangeBinsToClose": 10,
   "outOfRangeWaitMinutes": 30,
   "oorCooldownTriggerCount": 3,
   "oorCooldownHours": 12,
+  "autoRebalanceEnabled": false,
   "minVolumeToRebalance": 1000,
+
+  "repeatDeployCooldownEnabled": true,
+  "repeatDeployCooldownTriggerCount": 3,
+  "repeatDeployCooldownHours": 12,
+  "repeatDeployCooldownScope": "token",
+  "repeatDeployCooldownMinFeeEarnedPct": 0,
+
   "stopLossPct": -50,
   "takeProfitPct": 5,
+  "partialTakeProfitEnabled": false,
+  "partialTakeProfitPct": 15,
+  "partialTakeProfitScale": 0.5,
+
   "minFeePerTvl24h": 7,
   "minAgeBeforeYieldCheck": 60,
+
   "trailingTakeProfit": true,
   "trailingTriggerPct": 3,
   "trailingDropPct": 1.5,
   "pnlSanityMaxDiffPct": 5,
+
+  "kellyEnabled": true,
+  "kellyMinScale": 0.20,
+  "kellyMaxScale": 0.50,
+  "kellyLookbackDays": 30,
+  "kellyMinSamples": 10,
+
+  "macroPanicThreshold": -5,
+  "macroPanicMode": "pause",
+  "macroPanicRecoverThreshold": -2,
+
   "solMode": false,
-  "managementIntervalMin": 10,
-  "screeningIntervalMin": 30,
-  "healthCheckIntervalMin": 60,
-  "temperature": 0.373,
-  "maxTokens": 4096,
-  "maxSteps": 20,
-  "managementModel": "deepseek/deepseek-v4-flash",
-  "screeningModel": "deepseek/deepseek-v4-flash",
-  "generalModel": "deepseek/deepseek-v4-flash",
+
   "darwinEnabled": true,
   "darwinWindowDays": 60,
   "darwinRecalcEvery": 5,
@@ -76,26 +127,20 @@
   "darwinFloor": 0.3,
   "darwinCeiling": 2.5,
   "darwinMinSamples": 10,
-  "agentId": "",
-  "publicApiKey": "",
-  "agentMeridianApiUrl": "https://api.agentmeridian.xyz/api",
-  "lpAgentRelayEnabled": false,
+
   "chartIndicators": {
     "enabled": false,
     "entryPreset": "supertrend_break",
     "exitPreset": "supertrend_break",
     "rsiLength": 2,
-    "intervals": [
-      "5_MINUTE"
-    ],
+    "intervals": ["5_MINUTE"],
     "candles": 298,
     "rsiOversold": 30,
     "rsiOverbought": 80,
     "requireAllIntervals": false
   },
-  "telegramChatId": "",
-  "telegramLogBehavior": "overwrite", // default (send new messages), delete (delete previous cycle log first), or overwrite (edit previous cycle log)
-  "hiveMindUrl": "",
-  "hiveMindApiKey": "",
-  "hiveMindPullMode": "auto"
+
+  "managementIntervalMin": 10,
+  "screeningIntervalMin": 30,
+  "healthCheckIntervalMin": 60
 }
