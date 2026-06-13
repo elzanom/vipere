@@ -1,10 +1,19 @@
 import { config } from "../config.js";
 import { exec } from "child_process";
 import { promisify } from "util";
+import { getGmgnTokenFees, hasGmgnApiKey } from "./gmgn.js";
 
 const execAsync = promisify(exec);
 
 const DATAPI_BASE = "https://datapi.jup.ag/v1";
+
+async function resolveGlobalFeesSol(mint, fallbackFees) {
+  const fallback = fallbackFees != null ? parseFloat(Number(fallbackFees).toFixed(2)) : null;
+  if (!mint || config.gmgn?.feeSource !== "gmgn" || !hasGmgnApiKey()) return fallback;
+  const fees = await getGmgnTokenFees(mint);
+  if (fees?.total_fee != null) return parseFloat(fees.total_fee.toFixed(2));
+  return fallback;
+}
 
 /**
  * Get the narrative/story behind a token from Jupiter ChainInsight.
@@ -121,6 +130,10 @@ export async function getTokenInfo({ query }) {
     }));
   }
 
+  if (results[0]?.mint) {
+    results[0].global_fees_sol = await resolveGlobalFeesSol(results[0].mint, results[0].global_fees_sol);
+  }
+
   return { found: true, query, results };
 }
 
@@ -226,7 +239,7 @@ export async function getTokenHolders({ mint, limit = 20 }) {
 
   return {
     mint,
-    global_fees_sol: tokenInfo?.fees != null ? parseFloat(tokenInfo.fees.toFixed(2)) : null,
+    global_fees_sol: await resolveGlobalFeesSol(mint, tokenInfo?.fees),
     total_fetched: holders.length,
     showing: mapped.length,
     top_10_real_holders_pct: top10Pct.toFixed(2),

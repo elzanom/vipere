@@ -5,6 +5,7 @@ import { getScreeningDefaultsForTimeframe, normalizeTimeframe, scaleScreeningToT
 export { REPO_ROOT, repoPath, getScreeningDefaultsForTimeframe, normalizeTimeframe, scaleScreeningToTimeframe, TIMEFRAME_SCREENING_SCALES };
 
 const USER_CONFIG_PATH = repoPath("user-config.json");
+const GMGN_CONFIG_PATH = repoPath("gmgn-config.json");
 const DEFAULT_HIVEMIND_URL = "https://api.agentmeridian.xyz";
 const DEFAULT_AGENT_MERIDIAN_API_URL = "https://api.agentmeridian.xyz/api";
 const DEFAULT_AGENT_MERIDIAN_PUBLIC_KEY = "bWVyaWRpYW4taXMtdGhlLWJlc3QtYWdlbnRz";
@@ -12,6 +13,9 @@ const DEFAULT_HIVEMIND_API_KEY = DEFAULT_AGENT_MERIDIAN_PUBLIC_KEY;
 
 const u = fs.existsSync(USER_CONFIG_PATH)
   ? JSON.parse(fs.readFileSync(USER_CONFIG_PATH, "utf8"))
+  : {};
+const gmgnUserConfig = fs.existsSync(GMGN_CONFIG_PATH)
+  ? JSON.parse(fs.readFileSync(GMGN_CONFIG_PATH, "utf8"))
   : {};
 export const MIN_SAFE_BINS_BELOW = 35;
 
@@ -41,7 +45,7 @@ if (u.llmApiKey)  process.env.LLM_API_KEY       ||= u.llmApiKey;
 if (u.dryRun !== undefined) process.env.DRY_RUN ||= String(u.dryRun);
 if (u.publicApiKey) process.env.PUBLIC_API_KEY ||= u.publicApiKey;
 if (u.agentMeridianApiUrl) process.env.AGENT_MERIDIAN_API_URL ||= u.agentMeridianApiUrl;
-if (u.gmgnApiKey) process.env.GMGN_API_KEY ||= u.gmgnApiKey;
+if (gmgnUserConfig.apiKey || u.gmgnApiKey) process.env.GMGN_API_KEY ||= gmgnUserConfig.apiKey || u.gmgnApiKey;
 if (u.okxApiKey)    process.env.OKX_API_KEY    ||= u.okxApiKey;
 if (u.okxSecretKey)   process.env.OKX_SECRET_KEY   ||= u.okxSecretKey;
 if (u.okxPassphrase)  process.env.OKX_PASSPHRASE  ||= u.okxPassphrase;
@@ -201,9 +205,20 @@ export const config = {
     lpAgentRelayEnabled: u.lpAgentRelayEnabled ?? false,
   },
 
+  pnl: {
+    rpcUrl: nonEmptyString(u.pnlRpcUrl, process.env.PNL_RPC_URL, "https://pump.helius-rpc.com"),
+    source: nonEmptyString(u.pnlSource, "rpc"),
+    pollIntervalSec: Number(u.pnlPollIntervalSec ?? 3),
+    depositCacheTtlSec: Number(u.pnlDepositCacheTtlSec ?? 300),
+  },
+
   gmgn: {
-    apiKey: nonEmptyString(process.env.GMGN_API_KEY, u.gmgnApiKey),
+    apiKey: nonEmptyString(gmgnUserConfig.apiKey, process.env.GMGN_API_KEY, u.gmgnApiKey),
     useGmgnApi: u.useGmgnApi ?? false,
+    baseUrl: nonEmptyString(gmgnUserConfig.baseUrl, u.gmgnBaseUrl, "https://openapi.gmgn.ai"),
+    requestDelayMs: Number(gmgnUserConfig.requestDelayMs ?? u.gmgnRequestDelayMs ?? 2500),
+    maxRetries: Number(gmgnUserConfig.maxRetries ?? u.gmgnMaxRetries ?? 2),
+    feeSource: nonEmptyString(gmgnUserConfig.feeSource, u.gmgnFeeSource, "gmgn"),
   },
 
   jupiter: {
@@ -269,6 +284,14 @@ export function reloadScreeningThresholds() {
     if (fresh.minFeeActiveTvlRatio != null) s.minFeeActiveTvlRatio = fresh.minFeeActiveTvlRatio;
     if (fresh.gmgnApiKey !== undefined) config.gmgn.apiKey = fresh.gmgnApiKey;
     if (fresh.useGmgnApi !== undefined) config.gmgn.useGmgnApi = fresh.useGmgnApi;
+    if (fresh.gmgnFeeSource !== undefined) config.gmgn.feeSource = fresh.gmgnFeeSource;
+    if (fresh.gmgnBaseUrl !== undefined) config.gmgn.baseUrl = fresh.gmgnBaseUrl;
+    if (fresh.gmgnRequestDelayMs !== undefined) config.gmgn.requestDelayMs = Number(fresh.gmgnRequestDelayMs);
+    if (fresh.gmgnMaxRetries !== undefined) config.gmgn.maxRetries = Number(fresh.gmgnMaxRetries);
+    if (fresh.pnlRpcUrl !== undefined) config.pnl.rpcUrl = fresh.pnlRpcUrl;
+    if (fresh.pnlSource !== undefined) config.pnl.source = fresh.pnlSource;
+    if (fresh.pnlPollIntervalSec !== undefined) config.pnl.pollIntervalSec = Number(fresh.pnlPollIntervalSec);
+    if (fresh.pnlDepositCacheTtlSec !== undefined) config.pnl.depositCacheTtlSec = Number(fresh.pnlDepositCacheTtlSec);
     if (fresh.maxVolatility != null) s.maxVolatility = fresh.maxVolatility;
     if (fresh.minTokenFeesSol  != null) s.minTokenFeesSol  = fresh.minTokenFeesSol;
     if (fresh.maxTop10Pct      != null) s.maxTop10Pct      = fresh.maxTop10Pct;

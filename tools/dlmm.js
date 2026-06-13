@@ -30,6 +30,7 @@ import { normalizeMint } from "./wallet.js";
 import { appendDecision } from "../decision-log.js";
 import { agentMeridianJson, getAgentIdForRequests, getAgentMeridianHeaders } from "./agent-meridian.js";
 import { getAndClearStagedSignals } from "../signal-tracker.js";
+import { computePositions } from "./pnl.js";
 
 // ─── Lazy SDK loader ───────────────────────────────────────────
 // @meteora-ag/dlmm → @coral-xyz/anchor uses CJS directory imports
@@ -991,6 +992,33 @@ export async function getPositionPnl({ pool_address, position_address }) {
   pool_address = normalizeMint(pool_address);
   position_address = normalizeMint(position_address);
   const walletAddress = getWallet().publicKey.toString();
+
+  if (config.pnl?.source === "rpc") {
+    try {
+      const payload = await getMyPositions({ force: true, silent: true });
+      const p = payload?.positions?.find((position) => position.position === position_address);
+      if (p) {
+        return {
+          pnl_usd: p.pnl_usd,
+          pnl_pct: p.pnl_pct,
+          current_value_usd: p.total_value_usd,
+          unclaimed_fee_usd: p.unclaimed_fees_usd,
+          all_time_fees_usd: p.collected_fees_usd,
+          fee_per_tvl_24h: p.fee_per_tvl_24h,
+          in_range: p.in_range,
+          lower_bin: p.lower_bin,
+          upper_bin: p.upper_bin,
+          active_bin: p.active_bin,
+          age_minutes: p.age_minutes,
+          source: payload?.source || "rpc",
+        };
+      }
+      log("pnl_warn", "RPC positions lookup did not include requested position; falling back to existing PnL paths");
+    } catch (error) {
+      log("pnl_warn", `RPC PnL lookup failed; falling back to existing PnL paths: ${error.message}`);
+    }
+  }
+
   if (shouldUseLpAgentRelay()) {
     try {
       const payload = await getMyPositions({ force: true, silent: true });
@@ -1271,6 +1299,21 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
   }
 
   const loadPositions = async () => { try {
+    if (config.pnl?.source === "rpc") {
+      try {
+        if (!silent) log("positions", `Computing PnL from RPC (${config.pnl.rpcUrl})...`);
+        const rpcResult = await computePositions(walletAddress);
+        if (useLocalWallet) {
+          syncOpenPositions(rpcResult.positions.map((p) => p.position));
+          _positionsCache = rpcResult;
+          _positionsCacheAt = Date.now();
+        }
+        return rpcResult;
+      } catch (error) {
+        log("positions_warn", `RPC PnL path failed; falling back to existing positions path: ${error.message}`);
+      }
+    }
+
     let relayLpAgentByPosition = null;
     let relayRequestId = null;
     if (shouldUseLpAgentRelay()) {

@@ -1055,7 +1055,9 @@ Summarize the current portfolio health, total fees earned, and performance of al
     }
   }, { timezone: 'UTC' });
 
-  // Lightweight 30s PnL poller — updates trailing TP state between management cycles, no LLM
+  // Lightweight PnL poller — updates trailing TP state between management cycles, no LLM.
+  // With config.pnl.source="rpc" this runs on public infra, so it can poll aggressively.
+  const pnlPollMs = Math.max(1, Number(config.pnl?.pollIntervalSec ?? 3)) * 1000;
   let _pnlPollBusy = false;
   const pnlPollInterval = setInterval(async () => {
     if (_managementBusy || _screeningBusy || _pnlPollBusy) return;
@@ -1110,12 +1112,12 @@ Summarize the current portfolio health, total fees earned, and performance of al
     } finally {
       _pnlPollBusy = false;
     }
-  }, 30_000);
+  }, pnlPollMs);
 
    _cronTasks = [mgmtTask, screenTask, healthTask, briefingTask, briefingWatchdog, bootstrapTask];
   // Store interval ref so stopCronJobs can clear it
   _cronTasks._pnlPollInterval = pnlPollInterval;
-  log("cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m`);
+  log("cron", `Cycles started — management every ${config.schedule.managementIntervalMin}m, screening every ${config.schedule.screeningIntervalMin}m, pnl poll every ${Math.round(pnlPollMs / 1000)}s`);
 }
 
 // ═══════════════════════════════════════════

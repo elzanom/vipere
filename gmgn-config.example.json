@@ -1,0 +1,7 @@
+{
+  "apiKey": "",
+  "baseUrl": "https://openapi.gmgn.ai",
+  "requestDelayMs": 2500,
+  "maxRetries": 2,
+  "feeSource": "gmgn"
+}

@@ -16,8 +16,17 @@
   "agentMeridianApiUrl": "https://api.agentmeridian.xyz/api",
   "lpAgentRelayEnabled": false,
 
+  "pnlSource": "rpc",
+  "pnlRpcUrl": "https://pump.helius-rpc.com",
+  "pnlPollIntervalSec": 3,
+  "pnlDepositCacheTtlSec": 300,
+
   "gmgnApiKey": "",
   "useGmgnApi": false,
+  "gmgnFeeSource": "gmgn",
+  "gmgnBaseUrl": "https://openapi.gmgn.ai",
+  "gmgnRequestDelayMs": 2500,
+  "gmgnMaxRetries": 2,
 
   "okxApiKey": "",
   "okxSecretKey": "",

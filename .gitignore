@@ -6,6 +6,7 @@ user-config.json
 user-config.json.*
 user-config.json.live
 user-config.json.original
+gmgn-config.json
 *.json.15menit*
 *.json.30menit*
 *.json.5menit*
