@@ -1441,9 +1441,22 @@ export async function getMyPositions({ force = false, silent = false, wallet_add
           derivedValue: derivedPnlValue,
         });
         const pnlPctDiff = pnlSnapshot.diff;
-        const pnlPctSuspicious = pnlSnapshot.suspicious;
+        // Input-validity PnL suspicion (upstream 9f94792).
+        // Meteora's deposit cache can lag → diff-based suspicion false-positives on
+        // fast moves, suppressing STOP_LOSS/TRAILING_TP exactly when they're needed.
+        // Instead, flag only when prices fail or deposit data is missing entirely.
+        const currentBal = config.management.solMode
+          ? safeNum(binData?.unrealizedPnl?.balancesSol)
+          : safeNum(binData?.unrealizedPnl?.balances);
+        const depositsAvailable = config.management.solMode
+          ? safeNum(binData?.allTimeDeposits?.total?.sol)
+          : safeNum(binData?.allTimeDeposits?.total?.usd);
+        const hasBalance = currentBal > 0;
+        const priceMissing = hasBalance && derivedPnlPct == null && reportedPnlPct == null;
+        const depositsMissing = hasBalance && depositsAvailable <= 0;
+        const pnlPctSuspicious = priceMissing || depositsMissing;
         if (pnlPctSuspicious) {
-          log("positions_warn", `Suspicious pnl_pct for ${positionAddress.slice(0, 8)}: reported=${reportedPnlPct.toFixed(2)} derived=${derivedPnlPct.toFixed(2)} diff=${pnlPctDiff.toFixed(2)}`);
+          log("positions_warn", `Suspicious pnl_pct for ${positionAddress.slice(0, 8)}: reported=${reportedPnlPct != null ? reportedPnlPct.toFixed(2) : "null"} derived=${derivedPnlPct != null ? derivedPnlPct.toFixed(2) : "null"} diff=${pnlPctDiff != null ? pnlPctDiff.toFixed(2) : "null"} — priceMissing=${priceMissing} depositsMissing=${depositsMissing}`);
         }
 
         positions.push({
